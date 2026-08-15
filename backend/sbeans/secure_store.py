@@ -142,6 +142,21 @@ class SecureStore:
         self._write_state(password, remaining, payload["code_library"])
         return True
 
+    def update_record_time(self, password: str, email: str, record_time: str) -> int:
+        payload = self._payload(password)
+        target_email = email.strip().casefold()
+        updated = 0
+        for record in payload["records"]:
+            if str(record.get("email") or "").strip().casefold() != target_email:
+                continue
+            if record.get("time") == record_time:
+                continue
+            record["time"] = record_time
+            updated += 1
+        if updated:
+            self._write_state(password, payload["records"], payload["code_library"])
+        return updated
+
     def selected_accounts(self, password: str, record_ids: list[str]) -> list[tuple[str, str]]:
         records = self._records(password)
         by_id = {record["id"]: record for record in records}

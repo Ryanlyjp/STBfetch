@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
-from .login_flow import Account, parse_accounts, parse_proxies, run_logins
+from .login_flow import Account, format_singapore_time, parse_accounts, parse_proxies, run_logins
 from .secure_store import SecureStore
 
 
@@ -19,6 +19,27 @@ SCREENSHOT_DIR = Path(os.environ.get("SBEANS_SCREENSHOT_DIR", "/data/screenshots
 STORE_PATH = Path(os.environ.get("SBEANS_STORE_PATH", "/data/secure_store.json"))
 STORE = SecureStore(STORE_PATH, os.environ.get("SBEANS_ADMIN_PASSWORD", ""))
 ACTIVE_LOGIN_TASKS: set[asyncio.Task] = set()
+IMPORTANT_LOG_MARKERS = (
+    "任务开始",
+    "任务执行完成",
+    "登录完成",
+    "登录成功",
+    "登录状态",
+    "登录未成功",
+    "访问 VOXI",
+    "VOXI",
+    "已提取",
+    "代码提取",
+    "下次时间",
+    "下次日期",
+    "优惠码库",
+    "重试",
+    "失败",
+    "异常",
+    "超时",
+    "停止",
+    "取消",
+)
 
 app = FastAPI(title="SBeans", docs_url=None, redoc_url=None)
 app.add_middleware(
@@ -55,6 +76,19 @@ def require_admin(password: str | None) -> str:
 
 def event(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _is_important_log(message: str) -> bool:
+    text = str(message or "").strip()
+    if not text:
+        return False
+    if text.startswith("FlareSolverr步骤："):
+        return False
+    if "同一 Camoufox 会话登录完成" in text:
+        return False
+    if text.startswith("FlareSolverr：") and "失败" not in text and "未完成" not in text:
+        return False
+    return any(marker in text for marker in IMPORTANT_LOG_MARKERS)
 
 
 @app.get("/api/health")
@@ -145,11 +179,15 @@ async def login_stream(payload: LoginRequest, x_admin_password: str | None = Hea
         stream_started = time.monotonic()
 
         def runtime_log(message: str) -> None:
+            if not _is_important_log(message):
+                return
             timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
             elapsed = time.monotonic() - stream_started
             print(f"[sbeans] {timestamp} [+{elapsed:.3f}s] {message}", flush=True)
 
         async def log(message: str) -> None:
+            if not _is_important_log(message):
+                return
             runtime_log(message)
             await queue.put({
                 "type": "log",
@@ -162,21 +200,33 @@ async def login_stream(payload: LoginRequest, x_admin_password: str | None = Hea
             try:
                 results = await run_logins(accounts, proxies, SCREENSHOT_DIR, payload.debug, log)
                 for result in results:
-                    if result.get("success") is not True:
-                        continue
                     codes = result.get("codes")
                     next_date = _next_code_date(codes)
-                    if not isinstance(codes, list) or not next_date:
-                        await log(f"{result.get('email', '账号')}：代码结果不完整，未写入优惠码库")
+                    record_email = str(result.get("email") or "")
+                    if result.get("login_success") is True and next_date:
+                        next_date_display = format_singapore_time(next_date)
+                        updated_records = STORE.update_record_time(password, record_email, next_date_display)
+                        if updated_records:
+                            await log(
+                                f"{record_email}：账号记录时间已更新为下次时间={next_date_display}"
+                            )
+                    if result.get("success") is not True:
                         continue
+                    if not isinstance(codes, list) or not next_date:
+                        await log(f"{record_email or '账号'}：代码结果不完整，未写入优惠码库")
+                        continue
+                    next_date_display = format_singapore_time(next_date)
                     try:
                         STORE.add_code_library(
                             password,
-                            str(result.get("email") or ""),
+                            record_email,
                             codes,
                             next_date,
                         )
-                        await log(f"{result.get('email', '账号')}：四组优惠码已归档，下次日期={next_date}")
+                        await log(
+                            f"{record_email or '账号'}：四组优惠码已归档，"
+                            f"下次时间={next_date_display}"
+                        )
                     except Exception as exc:
                         await log(
                             f"{result.get('email', '账号')}：优惠码库写入失败，"

@@ -7,17 +7,20 @@ let records = [];
 let codeLibrary = [];
 let activeController = null;
 const proxyField = document.querySelector("#proxies");
+const PROXY_STORAGE_KEY = "sbeans-proxies";
 
-try {
-  const savedProxies = localStorage.getItem("sbeans-proxies");
-  if (savedProxies !== null) proxyField.value = savedProxies;
-} catch {
-  // Local storage can be unavailable in restrictive browser modes.
+function saveProxyPool() {
+  try { localStorage.setItem(PROXY_STORAGE_KEY, proxyField.value); } catch { /* ignore */ }
 }
 
-proxyField.addEventListener("input", () => {
-  try { localStorage.setItem("sbeans-proxies", proxyField.value); } catch { /* ignore */ }
-});
+try {
+  const savedProxies = localStorage.getItem(PROXY_STORAGE_KEY);
+  if (savedProxies !== null) proxyField.value = savedProxies;
+} catch { /* Local storage can be unavailable in restrictive browser modes. */ }
+
+proxyField.addEventListener("input", saveProxyPool);
+proxyField.addEventListener("change", saveProxyPool);
+window.addEventListener("pagehide", saveProxyPool);
 
 async function request(path, options = {}) {
   const response = await fetch(path, {
@@ -37,6 +40,55 @@ function setNotice(element, message, success = false) {
 function showView(viewId) {
   document.querySelectorAll(".view").forEach((view) => { view.hidden = view.id !== viewId; });
   document.querySelectorAll(".tab").forEach((tab) => { tab.classList.toggle("active", tab.dataset.view === viewId); });
+}
+
+function formatSingaporeDate(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "未知";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return `${raw} 00:00`;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw.replace("T", " ").slice(0, 16);
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Singapore",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date).map(({ type, value: part }) => [type, part]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+}
+
+function firstCodeDate(codes) {
+  return (Array.isArray(codes) ? codes : []).find((item) => item && item.endDate)?.endDate || "";
+}
+
+function createDateRow(value) {
+  const row = document.createElement("div"); row.className = "date-row";
+  const label = document.createElement("span"); label.className = "date-label"; label.textContent = "下次时间";
+  row.append(label);
+  if (value) row.append(createCopyButton(formatSingaporeDate(value), "复制下次时间"));
+  else {
+    const unknown = document.createElement("span"); unknown.className = "date-value"; unknown.textContent = "未知";
+    row.append(unknown);
+  }
+  return row;
+}
+
+function createCodeGrid(codes, extraClass = "") {
+  const codeList = document.createElement("div"); codeList.className = `code-list code-grid ${extraClass}`.trim();
+  (Array.isArray(codes) ? codes : []).forEach((item, index) => {
+    const entry = document.createElement("div"); entry.className = `code-entry${item.ok ? "" : " code-entry-error"}`;
+    const plan = document.createElement("span"); plan.className = "code-plan"; plan.textContent = String(index + 1);
+    entry.append(plan);
+    if (item.ok) entry.append(createCopyButton(item.code, `复制第 ${index + 1} 组优惠码`));
+    else {
+      const error = document.createElement("span"); error.className = "code-error"; error.textContent = item.error || "采集失败"; entry.append(error);
+    }
+    codeList.append(entry);
+  });
+  return codeList;
 }
 
 function renderRecords() {
@@ -78,19 +130,13 @@ function renderCodeLibrary() {
     const details = document.createElement("details"); details.className = "library-entry";
     const summary = document.createElement("summary"); summary.className = "library-summary";
     const email = document.createElement("strong"); email.textContent = entry.email || "未知账号";
-    const nextDate = document.createElement("span"); nextDate.className = "library-next-date";
-    nextDate.textContent = `下次日期：${entry.next_date || "未知"}`;
-    summary.append(email, nextDate);
+    const captured = document.createElement("span"); captured.className = "library-captured";
+    captured.textContent = `采集时间：${formatSingaporeDate(entry.captured_at)}`;
+    summary.append(email, captured);
+    const dateRow = createDateRow(entry.next_date);
     const meta = document.createElement("p"); meta.className = "library-meta";
-    meta.textContent = `采集时间：${entry.captured_at || "未知"}`;
-    const codeList = document.createElement("div"); codeList.className = "code-list library-code-list";
-    (Array.isArray(entry.codes) ? entry.codes : []).forEach((item) => {
-      const row = document.createElement("div"); row.className = "code-entry";
-      const plan = document.createElement("span"); plan.className = "code-plan"; plan.textContent = `计划 ${item.planId || "未知"}`;
-      row.append(plan, createCopyButton(item.code, "复制码"), createCopyButton(item.endDate, "复制日期"));
-      codeList.append(row);
-    });
-    details.append(summary, meta, codeList);
+    meta.textContent = "四组优惠码可分别复制";
+    details.append(summary, dateRow, meta, createCodeGrid(entry.codes, "library-code-list"));
     return details;
   }));
 }
@@ -112,7 +158,7 @@ function appendLog(item) {
   if (liveLog.querySelector(".empty")) liveLog.replaceChildren();
   const row = document.createElement("p");
   const time = document.createElement("time");
-  time.textContent = item.time ? new Date(item.time).toLocaleTimeString() : new Date().toLocaleTimeString();
+  time.textContent = formatSingaporeDate(item.time || new Date().toISOString());
   const message = document.createElement("span"); message.textContent = item.message;
   row.append(time, message); liveLog.append(row); liveLog.scrollTop = liveLog.scrollHeight;
 }
@@ -133,19 +179,7 @@ function renderResults(results) {
 
     const codes = Array.isArray(result.codes) ? result.codes : [];
     if (codes.length) {
-      const codeList = document.createElement("div"); codeList.className = "code-list";
-      codes.forEach((item) => {
-        const entry = document.createElement("div"); entry.className = `code-entry${item.ok ? "" : " code-entry-error"}`;
-        const plan = document.createElement("span"); plan.className = "code-plan"; plan.textContent = `计划 ${item.planId || "未知"}`;
-        entry.append(plan);
-        if (item.ok) {
-          entry.append(createCopyButton(item.code, "复制码"), createCopyButton(item.endDate, "复制日期"));
-        } else {
-          const error = document.createElement("span"); error.className = "code-error"; error.textContent = item.error || "采集失败"; entry.append(error);
-        }
-        codeList.append(entry);
-      });
-      account.append(codeList);
+      account.append(createDateRow(firstCodeDate(codes)), createCodeGrid(codes));
     }
     return account;
   }));
@@ -194,6 +228,7 @@ async function readEventStream(response) {
       if (item.type === "log") appendLog(item);
       if (item.type === "result") {
         renderResults(item.results);
+        loadRecords().catch(() => {});
         loadCodeLibrary().catch(() => {});
       }
       if (item.type === "error") throw new Error(item.message);

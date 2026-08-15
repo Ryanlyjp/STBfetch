@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
 from urllib.parse import quote, urlsplit
+from zoneinfo import ZoneInfo
 
 from playwright.async_api import (
     Browser,
@@ -39,6 +40,7 @@ TURNSTILE_TOKEN_MIN_LENGTH = 80
 LOGIN_RESULT_TIMEOUT_MS = 120_000
 MAX_ACCOUNT_ATTEMPTS = 1
 COOKIE_CONSENT_WAIT_MS = 8_000
+SINGAPORE_TIMEZONE = ZoneInfo("Asia/Singapore")
 LogCallback = Callable[[str], Awaitable[None]]
 
 
@@ -99,6 +101,31 @@ def parse_proxies(value: str) -> list[str]:
             seen.add(proxy)
             proxies.append(proxy)
     return proxies
+
+
+def format_singapore_time(value: object) -> str:
+    """Format an ISO date/time as Singapore local time for logs and UI data."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        return f"{raw} 00:00"
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return raw.replace("T", " ")[:16]
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(SINGAPORE_TIMEZONE).strftime("%Y-%m-%d %H:%M")
+
+
+def _first_code_date(codes: object) -> str:
+    if not isinstance(codes, list):
+        return ""
+    for item in codes:
+        if isinstance(item, dict) and item.get("endDate"):
+            return str(item["endDate"])
+    return ""
 
 
 def proxy_attempts(proxies: list[str], account_index: int) -> list[str]:
@@ -566,7 +593,7 @@ async def _login_once(
             f"{account.email}：准备截图，阶段={stage}，总耗时 {time.monotonic() - attempt_started:.1f}s，"
             f"当前 URL={_page_url(page)}",
         )
-        if debug or not result["success"]:
+        if debug:
             screenshot_dir.mkdir(parents=True, exist_ok=True)
             safe_email = re.sub(r"[^A-Za-z0-9_.-]", "_", account.email)[:80]
             screenshot_started = time.monotonic()
@@ -614,7 +641,7 @@ async def run_logins(
                         log,
                         email=account.email,
                         password=account.password,
-                        return_screenshot=True,
+                        return_screenshot=debug,
                         collect_codes=True,
                         collect_url=CODE_COLLECTION_URL,
                     )
@@ -651,13 +678,32 @@ async def run_logins(
                                 f"耗时={solver_solution.login_elapsed or 0:.1f}s",
                             )
                         if login_success:
+                            await _emit(log, f"{account.email}：登录完成，登录状态已验证")
+                            await _emit(log, f"{account.email}：正在访问 VOXI 界面")
+                            if code_collection_success:
+                                code_count = sum(
+                                    1 for item in (solver_solution.code_results or [])
+                                    if isinstance(item, dict) and item.get("ok")
+                                )
+                                next_date = format_singapore_time(
+                                    _first_code_date(solver_solution.code_results)
+                                )
+                                await _emit(
+                                    log,
+                                    f"{account.email}：已提取 {code_count} 组优惠码，下次时间={next_date or '未知'}",
+                                )
+                            else:
+                                await _emit(log, f"{account.email}：优惠码提取失败")
+                        else:
+                            await _emit(log, f"{account.email}：登录状态验证失败")
+                        if login_success:
                             await _emit(
                                 log,
                                 f"{account.email}：代码采集结果={code_collection_success}，"
                                 f"条数={len(solver_solution.code_results or [])}，"
                                 f"耗时={solver_solution.code_collection_elapsed or 0:.1f}s",
                             )
-                        if (debug or not success) and solver_solution.screenshot and not solver_solution.debug_screenshots:
+                        if debug and solver_solution.screenshot and not solver_solution.debug_screenshots:
                             try:
                                 safe_email = re.sub(r"[^A-Za-z0-9_.-]", "_", account.email)[:80]
                                 stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")[:-3] + "Z"
@@ -668,7 +714,7 @@ async def run_logins(
                                 await _emit(log, f"{account.email}：FlareSolverr 同页截图已保存，文件={screenshot_path.name}")
                             except Exception as exc:
                                 await _emit(log, f"{account.email}：FlareSolverr 同页截图保存失败，异常={type(exc).__name__}")
-                        if (debug or not success) and solver_solution.debug_screenshots:
+                        if debug and solver_solution.debug_screenshots:
                             safe_email = re.sub(r"[^A-Za-z0-9_.-]", "_", account.email)[:80]
                             debug_paths: list[str] = []
                             for screenshot_index, item in enumerate(solver_solution.debug_screenshots, start=1):

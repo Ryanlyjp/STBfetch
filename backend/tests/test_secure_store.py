@@ -44,6 +44,18 @@ class SecureStoreTests(unittest.TestCase):
             [("user@example.com", "secret-value")],
         )
 
+    def test_record_time_updates_by_email(self):
+        self.store.add_record("panel-old", "User@example.com", "secret-value", "首次手动输入")
+        self.assertEqual(
+            self.store.update_record_time("panel-old", "user@example.com", "2026-09-14 12:12"),
+            1,
+        )
+        self.assertEqual(self.store.list_records("panel-old")[0]["time"], "2026-09-14 12:12")
+        self.assertEqual(
+            self.store.update_record_time("panel-old", "user@example.com", "2026-09-14 12:12"),
+            0,
+        )
+
     def test_wrong_password_is_rejected(self):
         with self.assertRaises(ValueError):
             self.store.list_records("wrong")
