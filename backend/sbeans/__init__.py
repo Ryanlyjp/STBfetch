@@ -1,0 +1,1 @@
+"""SBeans login service."""

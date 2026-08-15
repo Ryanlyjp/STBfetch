@@ -1,0 +1,14 @@
+.env
+.env.*
+data/
+docs/
+front/
+flaresolverr/
+*.har
+*.zip
+docker-compose.override.yml
+docker-compose.*.local.yml
+progress.md
+.git/
+__pycache__
+*.pyc

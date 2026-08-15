@@ -1,0 +1,11 @@
+.git/
+.github/
+.idea/
+html_samples/
+resources/
+__pycache__/
+*.py[cod]
+*.log
+.env
+.env.*
+data/
