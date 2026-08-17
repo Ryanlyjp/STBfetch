@@ -79,10 +79,11 @@ function createDateRow(value) {
 function createCodeGrid(codes, extraClass = "") {
   const codeList = document.createElement("div"); codeList.className = `code-list code-grid ${extraClass}`.trim();
   (Array.isArray(codes) ? codes : []).forEach((item, index) => {
-    const entry = document.createElement("div"); entry.className = `code-entry${item.ok ? "" : " code-entry-error"}`;
+    const codeAvailable = Boolean(item && item.code) && item.ok !== false;
+    const entry = document.createElement("div"); entry.className = `code-entry${codeAvailable ? "" : " code-entry-error"}`;
     const plan = document.createElement("span"); plan.className = "code-plan"; plan.textContent = String(index + 1);
     entry.append(plan);
-    if (item.ok) entry.append(createCopyButton(item.code, `复制第 ${index + 1} 组优惠码`));
+    if (codeAvailable) entry.append(createCopyButton(item.code, `复制第 ${index + 1} 组优惠码`));
     else {
       const error = document.createElement("span"); error.className = "code-error"; error.textContent = item.error || "采集失败"; entry.append(error);
     }
