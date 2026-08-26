@@ -22,6 +22,8 @@ import utils
 from dtos import (STATUS_ERROR, STATUS_OK, ChallengeResolutionResultT,
                   ChallengeResolutionT, HealthResponse, IndexResponse,
                   V1RequestBase, V1ResponseBase)
+from aws_waf import (AWS_WAF_DETECT_TIMEOUT_MS, AwsWafAdapter,
+                     AwsWafError, AwsWafNetworkState, wait_for_problem)
 from camoufox_auth import code_collection_allowed
 from sessions import SessionsStorage
 
@@ -103,7 +105,10 @@ def _redact_url(value: object) -> str:
         parsed = urlsplit(raw)
         if not parsed.scheme or not parsed.netloc:
             return raw
-        sensitive = {'code', 'token', 'access_token', 'id_token', 'auth'}
+        sensitive = {
+            'api_key', 'auth', 'code', 'captcha_voucher', 'id_token',
+            'token', 'access_token',
+        }
         query = [
             (key, '<redacted>' if key.lower() in sensitive else item)
             for key, item in parse_qsl(parsed.query, keep_blank_values=True)
@@ -653,90 +658,153 @@ def _capture_camoufox_screenshot(
         )
 
 
-def _submit_camoufox_login(page, req: V1RequestBase) -> dict[str, object]:
+def _submit_camoufox_login(
+    page,
+    req: V1RequestBase,
+    waf_state: AwsWafNetworkState | None = None,
+    debug_screenshots: list[dict[str, str]] | None = None,
+    login_steps: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     """Submit the credentials in the same Camoufox context that solved Turnstile."""
     started = time.monotonic()
     timeout_ms = max(10_000, int(req.sbeans_login_timeout_ms or 120_000))
     login_path = urlsplit(req.url).path.rstrip("/")
     response_status = None
     response_started = time.monotonic()
-    buttons = page.locator('form[aria-label="form"] button')
-    try:
-        page.wait_for_function(
-            """
-            () => Array.from(document.querySelectorAll('form[aria-label="form"] button'))
-                .some((node) => String(node.innerText || '').trim() === 'Log in'
-                    && !node.disabled && node.getAttribute('aria-disabled') !== 'true')
-            """,
-            timeout=timeout_ms,
-        )
-    except Exception as exc:
-        raise Exception("Student Beans Log in button did not become enabled") from exc
+    waf_solved = False
+    waf_result: dict[str, int | bool] | None = None
 
-    submit = None
-    for index in range(buttons.count() - 1, -1, -1):
-        target = buttons.nth(index)
+    def on_response(response) -> None:
+        nonlocal response_status
         try:
-            if target.is_visible() and target.is_enabled() and target.inner_text().strip() == "Log in":
-                submit = target
+            if urlsplit(response.url).path.rstrip("/") == "/uk/authorisation/login":
+                response_status = int(response.status)
+                logging.info(
+                    "Camoufox Student Beans login API responded status=%s elapsed=%.1fs",
+                    response_status,
+                    time.monotonic() - response_started,
+                )
+        except Exception:
+            logging.debug('Camoufox login response inspection failed', exc_info=True)
+
+    if waf_state is not None:
+        page.on("response", on_response)
+    try:
+        for attempt in range(2):
+            buttons = page.locator('form[aria-label="form"] button')
+            try:
+                page.wait_for_function(
+                    """
+                    () => Array.from(document.querySelectorAll('form[aria-label="form"] button'))
+                        .some((node) => String(node.innerText || '').trim() === 'Log in'
+                            && !node.disabled && node.getAttribute('aria-disabled') !== 'true')
+                    """,
+                    timeout=timeout_ms,
+                )
+            except Exception as exc:
+                raise Exception("Student Beans Log in button did not become enabled") from exc
+
+            submit = None
+            for index in range(buttons.count() - 1, -1, -1):
+                target = buttons.nth(index)
+                try:
+                    if target.is_visible() and target.is_enabled() and target.inner_text().strip() == "Log in":
+                        submit = target
+                        break
+                except Exception:
+                    continue
+            if submit is None:
+                raise Exception("Student Beans Log in button was not found")
+
+            if waf_solved:
+                submit.evaluate("(element) => element.click()")
+            else:
+                submit.click(timeout=timeout_ms)
+            if waf_state is not None and not waf_solved:
+                problem_url = wait_for_problem(
+                    page,
+                    waf_state,
+                    min(timeout_ms, AWS_WAF_DETECT_TIMEOUT_MS),
+                )
+                if problem_url and not waf_state.voucher_urls:
+                    try:
+                        waf_result = AwsWafAdapter(page, waf_state).solve(problem_url)
+                    except AwsWafError as exc:
+                        logging.error('Camoufox AWS WAF solve failed: %s', exc)
+                        _camoufox_step(
+                            login_steps,
+                            'aws-waf-solve',
+                            'failed',
+                            page,
+                            reason=str(exc),
+                        )
+                        raise
+                    waf_solved = True
+                    logging.info(
+                        'Camoufox AWS WAF solved images=%s selected=%s token_length=%s',
+                        waf_result.get('images'),
+                        waf_result.get('selected'),
+                        waf_result.get('token_length'),
+                    )
+                    _camoufox_debug_state(page, 'aws-waf-solved')
+                    _capture_camoufox_screenshot(page, debug_screenshots, 'aws-waf-solved')
+                    _camoufox_step(
+                        login_steps,
+                        'aws-waf-solve',
+                        'success',
+                        page,
+                        images=waf_result.get('images'),
+                        selected=waf_result.get('selected'),
+                        token_length=waf_result.get('token_length'),
+                    )
+                    # The AWS WAF widget replays the request that triggered
+                    # the challenge after Confirm. A second Log in click
+                    # races that native replay and leaves the form disabled.
+                    break
+            break
+
+        result_deadline = time.monotonic() + timeout_ms / 1000
+        message = "站点未确认登录成功"
+        success = False
+        while time.monotonic() < result_deadline:
+            current_url = str(page.url or "")
+            current_path = urlsplit(current_url).path.rstrip("/")
+            try:
+                has_password = page.locator('input[type="password"]').count() > 0
+            except Exception:
+                has_password = True
+            if current_path != login_path and not has_password:
+                success = True
+                message = "登录成功，已离开登录页"
                 break
-        except Exception:
-            continue
-    if submit is None:
-        raise Exception("Student Beans Log in button was not found")
+            error = _camoufox_visible_login_error(page)
+            if error:
+                message = error
+                break
+            page.wait_for_timeout(500)
 
-    try:
-        with page.expect_response(
-            lambda response: urlsplit(response.url).path.rstrip("/") == "/uk/authorisation/login",
-            timeout=timeout_ms,
-        ) as response_info:
-            submit.click(timeout=timeout_ms)
-        response_status = int(response_info.value.status)
+        elapsed = time.monotonic() - started
+        if not success and response_status == 405 and not waf_solved:
+            message = "登录 API 返回 405，未观测到 AWS WAF challenge"
         logging.info(
-            "Camoufox Student Beans login API responded status=%s elapsed=%.1fs",
+            "Camoufox Student Beans login finished success=%s response_status=%s waf_solved=%s elapsed=%.1fs url_path=%s",
+            success,
             response_status,
-            time.monotonic() - response_started,
+            waf_solved,
+            elapsed,
+            urlsplit(str(page.url or "")).path,
         )
-    except Exception:
-        logging.info(
-            "Camoufox Student Beans login API response was not observed elapsed=%.1fs",
-            time.monotonic() - response_started,
-        )
-
-    result_deadline = time.monotonic() + timeout_ms / 1000
-    message = "站点未确认登录成功"
-    success = False
-    while time.monotonic() < result_deadline:
-        current_url = str(page.url or "")
-        current_path = urlsplit(current_url).path.rstrip("/")
-        try:
-            has_password = page.locator('input[type="password"]').count() > 0
-        except Exception:
-            has_password = True
-        if current_path != login_path and not has_password:
-            success = True
-            message = "登录成功，已离开登录页"
-            break
-        error = _camoufox_visible_login_error(page)
-        if error:
-            message = error
-            break
-        page.wait_for_timeout(500)
-
-    elapsed = time.monotonic() - started
-    logging.info(
-        "Camoufox Student Beans login finished success=%s response_status=%s elapsed=%.1fs url_path=%s",
-        success,
-        response_status,
-        elapsed,
-        urlsplit(str(page.url or "")).path,
-    )
-    return {
-        "success": success,
-        "message": message,
-        "response_status": response_status,
-        "elapsed": elapsed,
-    }
+        return {
+            "success": success,
+            "message": message,
+            "response_status": response_status,
+            "elapsed": elapsed,
+            "waf_solved": waf_solved,
+            "waf_result": waf_result or {},
+        }
+    finally:
+        if waf_state is not None:
+            page.remove_listener("response", on_response)
 
 
 def _wait_for_account_settings(
@@ -1233,6 +1301,8 @@ def _resolve_camoufox_challenge(req: V1RequestBase) -> ChallengeResolutionT:
     camoufox = Camoufox(**options)
     context = camoufox.__enter__()
     page = context.new_page()
+    waf_state = AwsWafNetworkState()
+    waf_state.attach(page)
     debug_screenshots: list[dict[str, str]] | None = [] if req.returnScreenshot else None
     login_steps: list[dict[str, object]] = []
     deadline = time.monotonic() + timeout_ms / 1000
@@ -1338,7 +1408,13 @@ def _resolve_camoufox_challenge(req: V1RequestBase) -> ChallengeResolutionT:
         _capture_camoufox_screenshot(page, debug_screenshots, 'turnstile-solved-before-login')
         _camoufox_step(login_steps, 'turnstile-solved-before-login', 'success', page)
         if req.sbeans_login:
-            login_result = _submit_camoufox_login(page, req)
+            login_result = _submit_camoufox_login(
+                page,
+                req,
+                waf_state,
+                debug_screenshots,
+                login_steps,
+            )
             _camoufox_debug_state(page, 'login-submit-finished')
             _capture_camoufox_screenshot(page, debug_screenshots, 'login-submit-finished')
             _camoufox_step(
@@ -1410,6 +1486,7 @@ def _resolve_camoufox_challenge(req: V1RequestBase) -> ChallengeResolutionT:
         response.result = result
         return response
     finally:
+        waf_state.detach()
         camoufox.__exit__(None, None, None)
 
 

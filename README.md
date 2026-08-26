@@ -24,6 +24,8 @@ Turnstile、登录和代码采集必须由同一次 FlareSolverr Camoufox 会话
 
 截图保存在 `data/screenshots/`。停止服务使用 `docker-compose down`。
 
+AWS WAF 视觉 CAPTCHA 由同一 Camoufox 页面在 Turnstile 后处理：页面第一次产生 AWS WAF `problem` 响应后，FlareSolverr 将这份原始 challenge 的图片和目标文字发送给配置的视觉 provider，根据返回的索引在当前 WAF 弹窗中点击图片并点击 `Confirm`，由页面原生完成 `verify`、`voucher` 并自动重放原登录请求；不会二次请求 `problem`、重新加载页面、再次点击 `Log in` 或手动写入 `aws-waf-token`。视觉 provider 通过 `.env` 的 `VISION_API_URL`、`VISION_API_KEY`、`VISION_MODEL` 和 `VISION_API_MODE` 配置；也可暂时留空通用配置，继续使用兼容的 `GEMINI_API_KEY`。AWS WAF 自身的 `api_key` 从页面请求中读取，不需要另行配置。详见 [docs/aws-waf.md](docs/aws-waf.md)。
+
 ## 上传到 GitHub
 
 仓库只应包含源码、测试、Docker 配置和 `.env.example`。真实 `.env`、`data/` 运行时目录、账号记录、截图、`*.har` 抓包、日志和 `progress.md` 已通过忽略规则排除；上传前请按 [docs/github-upload.md](docs/github-upload.md) 执行检查。定制 FlareSolverr 源码已内置在 `flaresolverr/`，其运行数据或凭据仍不得复制进本项目。

@@ -8,6 +8,13 @@ services:
     environment:
       LOG_LEVEL: info
       CAPTCHA_SOLVER: none
+      VISION_API_URL: ${VISION_API_URL:-}
+      VISION_API_KEY: ${VISION_API_KEY:-}
+      VISION_MODEL: ${VISION_MODEL:-}
+      VISION_API_MODE: ${VISION_API_MODE:-chat_completions}
+      VISION_AUTH_HEADER: ${VISION_AUTH_HEADER:-Authorization}
+      VISION_AUTH_PREFIX: ${VISION_AUTH_PREFIX:-Bearer}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       SBEANS_TURNSTILE_SITEKEY: 0x4AAAAAAA06-AYUI0e5uiaW
       TZ: UTC
     expose:
