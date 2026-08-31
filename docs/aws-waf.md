@@ -43,7 +43,7 @@ VISION_API_MODE=responses
 
 ## 流程
 
-1. Camoufox 填写账号并完成 Turnstile。
+1. Camoufox 填写账号并完成 Turnstile；提交前会再次检查并关闭延迟出现的 OneTrust Cookie 遮罩。
 2. 点击 `Log in`，捕获同一页面第一次产生的 AWS WAF `problem` URL 和响应内容。
 3. 使用这份原始 `problem` 响应中的图片、目标、状态和密钥字段，保持识别内容与 UI 一一对应；只有图片识别请求发往视觉 provider，不再二次请求 `problem`。
 4. 根据视觉 provider 返回的索引，在当前 `awswaf-captcha` 弹窗中点击对应图片并点击 `Confirm`，由页面原生完成 `verify`、`voucher` 和 token 状态更新；不重新加载页面、不手动写入 token/cookie，也不再次点击 `Log in`，因为 Confirm 会自动重放触发 challenge 的原登录请求。

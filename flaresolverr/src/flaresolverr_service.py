@@ -691,6 +691,9 @@ def _submit_camoufox_login(
         page.on("response", on_response)
     try:
         for attempt in range(2):
+            dismissed = _dismiss_cookie_consent_page(page)
+            if dismissed:
+                logging.info('Camoufox Cookie consent dismissed before login submit: %s', dismissed)
             buttons = page.locator('form[aria-label="form"] button')
             try:
                 page.wait_for_function(
@@ -716,9 +719,23 @@ def _submit_camoufox_login(
             if submit is None:
                 raise Exception("Student Beans Log in button was not found")
 
-            if waf_solved:
-                submit.evaluate("(element) => element.click()")
-            else:
+            # OneTrust may mount or become visible after the form has already
+            # enabled the button, so check immediately before the real click.
+            dismissed = _dismiss_cookie_consent_page(page)
+            if dismissed:
+                logging.info('Camoufox Cookie consent dismissed before login click: %s', dismissed)
+            try:
+                if waf_solved:
+                    submit.evaluate("(element) => element.click()")
+                else:
+                    submit.click(timeout=timeout_ms)
+            except Exception as exc:
+                if waf_solved or 'intercepts pointer events' not in str(exc):
+                    raise
+                dismissed = _dismiss_cookie_consent_page(page)
+                if not dismissed:
+                    raise
+                logging.info('Camoufox Cookie consent dismissed after click interception: %s', dismissed)
                 submit.click(timeout=timeout_ms)
             if waf_state is not None and not waf_solved:
                 problem_url = wait_for_problem(
