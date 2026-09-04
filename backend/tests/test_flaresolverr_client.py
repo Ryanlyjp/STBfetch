@@ -1,11 +1,70 @@
+import io
 import os
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 
-from sbeans.flaresolverr_client import solve_turnstile
+from sbeans.flaresolverr_client import _failure_location, _http_error_message, _post_json, solve_turnstile
 
 
 class FlareSolverrClientTests(unittest.IsolatedAsyncioTestCase):
+    def test_failure_location_identifies_main_flow_area(self):
+        self.assertEqual(_failure_location("Vision API request failed: TimeoutError"), "AWS WAF视觉识别")
+        self.assertEqual(_failure_location("Camoufox Turnstile token timeout"), "Turnstile")
+        self.assertEqual(_failure_location("VOXI GraphQL request failed"), "VOXI代码采集")
+
+    def test_http_error_detail_is_returned_without_sensitive_values(self):
+        error = HTTPError(
+            "http://solver:8191/v1",
+            500,
+            "server error",
+            {},
+            io.BytesIO(
+                b'{"status":"error","message":"Error: Vision API request failed: TimeoutError"}'
+            ),
+        )
+        self.assertEqual(_http_error_message(error), "Vision API request failed: TimeoutError")
+
+    def test_post_json_includes_remote_http_error_detail_and_redacts_fields(self):
+        error = HTTPError(
+            "http://solver:8191/v1",
+            500,
+            "server error",
+            {},
+            io.BytesIO(
+                b'{"message":"Error: Vision API HTTP 401: api_key=private-key token=private-token"}'
+            ),
+        )
+        with patch("sbeans.flaresolverr_client.urlopen", side_effect=error):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"FlareSolverr HTTP 500: Vision API HTTP 401: api_key=<redacted> token=<redacted>",
+            ):
+                _post_json("http://solver:8191/v1", {}, 1)
+
+    async def test_solver_failure_log_includes_location_and_upstream_reason(self):
+        logs = []
+
+        async def log(message):
+            logs.append(message)
+
+        with patch.dict(os.environ, {"SBEANS_FLARESOLVERR_URL": "http://solver:8191"}), patch(
+            "sbeans.flaresolverr_client._post_json",
+            side_effect=RuntimeError("FlareSolverr HTTP 500: Vision API request failed: TimeoutError"),
+        ):
+            solution = await solve_turnstile(
+                "https://accounts.studentbeans.com/uk/authorisation/log-in",
+                "",
+                log,
+                email="first@example.com",
+                password="secret",
+            )
+
+        self.assertIsNone(solution)
+        self.assertTrue(any("位置=AWS WAF视觉识别" in message for message in logs))
+        self.assertTrue(any("Vision API request failed: TimeoutError" in message for message in logs))
+        self.assertFalse(any("secret" in message for message in logs))
+
     async def test_solver_returns_redacted_solution_and_cleans_session(self):
         token = "t" * 96
         responses = [
@@ -128,6 +187,37 @@ class FlareSolverrClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("同一 Camoufox" in message for message in logs))
         self.assertTrue(any("登录成功=True" in message for message in logs))
         self.assertFalse(any("secret" in message for message in logs))
+
+    async def test_same_page_request_timeout_covers_login_and_code_collection(self):
+        responses = [{
+            "status": "ok",
+            "solution": {
+                "turnstile_token": "s" * 96,
+                "userAgent": "solver-agent",
+                "cookies": [],
+                "sbeans_login_elapsed": 0.1,
+            },
+        }]
+
+        with patch.dict(
+            os.environ,
+            {
+                "SBEANS_FLARESOLVERR_URL": "http://solver:8191",
+                "SBEANS_FLARESOLVERR_TIMEOUT_MS": "180000",
+            },
+        ), patch(
+            "sbeans.flaresolverr_client._post_json", side_effect=responses
+        ) as post:
+            solution = await solve_turnstile(
+                "https://accounts.studentbeans.com/uk/authorisation/log-in",
+                "",
+                email="first@example.com",
+                password="secret",
+                collect_codes=True,
+            )
+
+        self.assertIsNotNone(solution)
+        self.assertEqual(post.call_args.args[2], 480.0)
 
 
 if __name__ == "__main__":

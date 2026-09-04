@@ -406,7 +406,40 @@ def _camoufox_proxy(proxy: dict | None) -> dict | None:
 
 def _dismiss_cookie_consent_page(page) -> str:
     deadline = time.monotonic() + 3.0
-    accepted = {'accept', 'accept all', 'accept all cookies', 'agree'}
+    accepted = {
+        'accept', 'accept all', 'accept all cookies', 'accept recommended cookies',
+        'allow all', 'allow all cookies', 'agree',
+    }
+
+    def click_target(target) -> bool:
+        try:
+            target.click(timeout=2_000)
+            return True
+        except Exception:
+            try:
+                # A pointer shield can remain above the consent button during
+                # fade-in; invoke that button's own DOM click handler.
+                target.evaluate("(element) => element.click()")
+                return True
+            except Exception:
+                return False
+
+    def consent_visible() -> bool:
+        try:
+            return bool(page.evaluate(
+                """() => [
+                    '#onetrust-banner-sdk', '#onetrust-pc-sdk',
+                    '#onetrust-pc-dark-filter', '.onetrust-pc-dark-filter'
+                ].some((selector) => Array.from(document.querySelectorAll(selector)).some((node) => {
+                    const style = window.getComputedStyle(node);
+                    const rect = node.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden'
+                        && style.opacity !== '0' && rect.width > 0 && rect.height > 0;
+                }))"""
+            ))
+        except Exception:
+            return True
+
     while time.monotonic() < deadline:
         dismissed = ''
         direct = page.locator(
@@ -416,13 +449,16 @@ def _dismiss_cookie_consent_page(page) -> str:
             target = direct.nth(index)
             try:
                 if target.is_visible() and target.is_enabled():
-                    target.click(timeout=2_000)
-                    dismissed = 'OneTrust'
-                    break
+                    if click_target(target):
+                        dismissed = 'OneTrust'
+                        break
             except Exception:
                 continue
         if not dismissed:
-            candidates = page.locator('button, a, [role="button"]')
+            candidates = page.locator(
+                '#onetrust-consent-sdk button, #onetrust-consent-sdk a, '
+                '#onetrust-consent-sdk [role="button"]'
+            )
             for index in range(candidates.count()):
                 target = candidates.nth(index)
                 try:
@@ -432,27 +468,15 @@ def _dismiss_cookie_consent_page(page) -> str:
                         continue
                     text = target.inner_text().replace('\n', ' ').strip().lower()
                     if text in accepted:
-                        target.click(timeout=2_000)
-                        dismissed = text
-                        break
+                        if click_target(target):
+                            dismissed = text
+                            break
                 except Exception:
                     continue
         if dismissed:
             for _ in range(8):
                 page.wait_for_timeout(250)
-                still_visible = page.evaluate(
-                    """() => {
-                        const node = document.querySelector(
-                            '#onetrust-accept-btn-handler, #accept-recommended-btn-handler'
-                        );
-                        if (!node) return false;
-                        const style = window.getComputedStyle(node);
-                        const rect = node.getBoundingClientRect();
-                        return style.display !== 'none' && style.visibility !== 'hidden'
-                            && style.opacity !== '0' && rect.width > 0 && rect.height > 0;
-                    }"""
-                )
-                if not still_visible:
+                if not consent_visible():
                     return dismissed
             logging.info('Camoufox Cookie consent click still visible, retrying')
         page.wait_for_timeout(250)

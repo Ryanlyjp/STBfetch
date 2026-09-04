@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 from urllib.error import HTTPError, URLError
@@ -69,6 +70,59 @@ def _proxy_payload(proxy: str) -> dict[str, str] | None:
     return payload
 
 
+def _safe_remote_message(value: object) -> str:
+    message = str(value or "").replace("\x00", " ").strip()
+    if message.lower().startswith("error:"):
+        message = message[6:].strip()
+    message = re.sub(
+        r"(?i)(api[_ -]?key|token|password|secret|authorization|cookie)\s*[:=]\s*[^\s,;]+",
+        r"\1=<redacted>",
+        message,
+    )
+    message = re.sub(
+        r"(?i)([?&](?:api[_-]?key|key|token|password|secret)=)[^&\s]+",
+        r"\1<redacted>",
+        message,
+    )
+    message = re.sub(r"(?i)bearer\s+[^\s,;]+", "Bearer <redacted>", message)
+    return " ".join(message.split())[:300]
+
+
+def _response_message(value: object) -> str:
+    if not isinstance(value, dict):
+        return ""
+    for key in ("message", "error", "detail"):
+        message = _safe_remote_message(value.get(key))
+        if message:
+            return message
+    return ""
+
+
+def _failure_location(message: str) -> str:
+    lowered = str(message or "").lower()
+    if any(marker in lowered for marker in ("vision api", "aws waf", "captcha")):
+        return "AWS WAF视觉识别"
+    if "turnstile" in lowered:
+        return "Turnstile"
+    if any(marker in lowered for marker in ("voxi", "code collection", "graphql")):
+        return "VOXI代码采集"
+    if any(marker in lowered for marker in ("login", "登录")):
+        return "登录提交"
+    return "FlareSolverr请求"
+
+
+def _http_error_message(exc: HTTPError) -> str:
+    try:
+        raw = exc.read(16_384).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    try:
+        detail = _response_message(json.loads(raw))
+    except json.JSONDecodeError:
+        detail = _safe_remote_message(raw)
+    return detail
+
+
 def _post_json(endpoint: str, payload: dict[str, object], timeout_seconds: float) -> dict[str, object]:
     request = Request(
         endpoint,
@@ -80,7 +134,11 @@ def _post_json(endpoint: str, payload: dict[str, object], timeout_seconds: float
         with urlopen(request, timeout=timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        raise RuntimeError(f"FlareSolverr HTTP {exc.code}") from exc
+        detail = _http_error_message(exc)
+        message = f"FlareSolverr HTTP {exc.code}"
+        if detail:
+            message += f": {detail}"
+        raise RuntimeError(message) from exc
     except (URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"FlareSolverr 请求失败：{type(exc).__name__}") from exc
 
@@ -139,8 +197,15 @@ async def solve_turnstile(
         return None
 
     timeout_ms = _timeout_ms()
-    request_timeout = timeout_ms / 1000 + 15
     same_browser_login = bool(email and password)
+    # The solver's Turnstile window starts after navigation and form filling;
+    # same-page login and code collection need their own time budget as well.
+    request_timeout = (
+        timeout_ms / 1000
+        + (120 if same_browser_login else 0)
+        + (120 if same_browser_login and collect_codes else 0)
+        + 60
+    )
     if same_browser_login:
         await _emit(log, "FlareSolverr：开始同一 Camoufox 会话求解并提交登录")
         if collect_codes:
@@ -172,7 +237,8 @@ async def solve_turnstile(
             request_timeout,
         )
         if solved.get("status") != "ok":
-            raise RuntimeError("FlareSolverr 未完成页面求解")
+            detail = _response_message(solved)
+            raise RuntimeError(f"FlareSolverr 返回错误：{detail or '未完成页面求解'}")
         solution = solved.get("solution")
         if not isinstance(solution, dict):
             raise RuntimeError("FlareSolverr 返回内容缺少 solution")
@@ -308,5 +374,9 @@ async def solve_turnstile(
             ),
         )
     except Exception as exc:
-        await _emit(log, f"FlareSolverr：求解失败，本次账号尝试失败 - {str(exc).splitlines()[0][:180]}")
+        detail = str(exc).splitlines()[0][:300]
+        await _emit(
+            log,
+            f"FlareSolverr：求解失败，位置={_failure_location(detail)}，错误={detail}，本次账号尝试失败",
+        )
         return None

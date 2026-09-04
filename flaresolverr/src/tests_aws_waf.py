@@ -78,6 +78,17 @@ class _FakeResponse:
         return self.payload
 
 
+class _FakeNetworkResponse:
+    def __init__(self, url, status, payload):
+        self.url = url
+        self.status = status
+        self.headers = {"content-type": "application/json"}
+        self.payload = json.dumps(payload).encode("utf-8")
+
+    def body(self):
+        return self.payload
+
+
 class _FakeLocator:
     def __init__(self, page, kind, index=None):
         self.page = page
@@ -265,6 +276,34 @@ class AwsWafTests(unittest.TestCase):
             with self.assertRaisesRegex(AwsWafError, "prepayment credits are depleted"):
                 aws_waf._vision_text(["a"], "bike", "key")
         request.assert_called_once()
+
+    def test_network_diagnostics_capture_semantics_without_sensitive_values(self):
+        state = AwsWafNetworkState()
+        state._on_response(_FakeNetworkResponse(
+            "https://w.eu-west-1.captcha.awswaf.com/id/verify",
+            200,
+            {
+                "success": False,
+                "errorCode": "incorrect-answer",
+                "message": "token=private-value",
+                "num_solutions_provided": 4,
+                "num_solutions_required": 5,
+                "reason": {"code": "incorrect-answer"},
+                "captcha_voucher": "voucher-private-value",
+            },
+        ))
+        diagnostic = state.verify_diagnostics[0]
+        self.assertEqual(200, diagnostic["status"])
+        self.assertEqual("json_object", diagnostic["body_format"])
+        self.assertFalse(diagnostic["success"])
+        self.assertEqual("incorrect-answer", diagnostic["errorCode"])
+        self.assertEqual(4, diagnostic["num_solutions_provided"])
+        self.assertEqual(5, diagnostic["num_solutions_required"])
+        self.assertEqual(["code"], diagnostic["reason_keys"])
+        self.assertTrue(diagnostic["captcha_voucher_present"])
+        self.assertEqual(len("voucher-private-value"), diagnostic["captcha_voucher_length"])
+        self.assertNotIn("private-value", json.dumps(diagnostic))
+        self.assertNotIn("voucher-private-value", json.dumps(diagnostic))
 
     def test_urls_match_student_beans_waf_hosts_and_paths(self):
         api_key, locale, verify_url, voucher_url = AwsWafAdapter._urls(

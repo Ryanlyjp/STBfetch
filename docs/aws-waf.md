@@ -48,6 +48,10 @@ VISION_API_MODE=responses
 3. 使用这份原始 `problem` 响应中的图片、目标、状态和密钥字段，保持识别内容与 UI 一一对应；只有图片识别请求发往视觉 provider，不再二次请求 `problem`。
 4. 根据视觉 provider 返回的索引，在当前 `awswaf-captcha` 弹窗中点击对应图片并点击 `Confirm`，由页面原生完成 `verify`、`voucher` 和 token 状态更新；不重新加载页面、不手动写入 token/cookie，也不再次点击 `Log in`，因为 Confirm 会自动重放触发 challenge 的原登录请求。
 
+同页任务的 backend 等待时间覆盖页面加载、Turnstile 等待、登录提交和代码采集阶段；页面加载或表单填写消耗的时间不会挤占 Turnstile 的完整等待窗口。OneTrust 延迟出现时，solver 会在提交前使用页面原生接受按钮处理，并在按钮被遮罩动画覆盖时触发该按钮自己的 DOM click 处理。
+
+面板沿用摘要结果显示，不展示无法从阻塞式 FlareSolverr 请求中实时取得的伪阶段进度。任务失败时会保留失败摘要，并显示脱敏后的错误类型、发生位置和上游原因，例如 `Vision API request failed: TimeoutError`；响应中的 key、token、password、secret、authorization 和 cookie 字段会被遮罩。AWS WAF Confirm 失败时还会显示 `/verify`、`/voucher` 的状态、响应是否可解析、业务结果字段、token 是否变化，以及图片控件/Canvas 的选中统计和点击坐标，用来区分识别错误、点击未生效和 WAF 业务拒绝。响应体无法解析时仍显示 HTTP 状态码，不会把原始请求体、图片或凭据显示到面板。
+
 adapter 不记录 provider key、AWS WAF `api_key`、token、voucher 或图片内容。包含这些数据的 HAR 文件和运行日志不得提交到 Git。
 
 ## 运行前检查

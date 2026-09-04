@@ -4,7 +4,7 @@ from playwright.sync_api import sync_playwright
 
 from camoufox_auth import code_collection_allowed
 from dtos import V1RequestBase
-from flaresolverr_service import _submit_camoufox_login
+from flaresolverr_service import _dismiss_cookie_consent_page, _submit_camoufox_login
 
 
 class CamoufoxLoginAuthTests(unittest.TestCase):
@@ -41,6 +41,29 @@ class CamoufoxLoginAuthTests(unittest.TestCase):
             result = _submit_camoufox_login(page, request)
 
             self.assertTrue(result["success"])
+            self.assertEqual(page.locator("#onetrust-consent-sdk").count(), 0)
+            browser.close()
+
+    def test_cookie_consent_dom_click_handles_pointer_shield(self):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True, executable_path='/usr/bin/chromium')
+            page = browser.new_page()
+            page.set_content(
+                """
+                <div id="onetrust-consent-sdk">
+                  <div class="onetrust-pc-dark-filter" style="position:fixed;inset:0;z-index:2"></div>
+                  <button id="onetrust-accept-btn-handler" type="button"
+                    style="position:fixed;top:20px;left:20px;z-index:1"
+                    onclick="document.querySelector('#onetrust-consent-sdk').remove()">
+                    Accept All Cookies
+                  </button>
+                </div>
+                """
+            )
+
+            result = _dismiss_cookie_consent_page(page)
+
+            self.assertEqual(result, "OneTrust")
             self.assertEqual(page.locator("#onetrust-consent-sdk").count(), 0)
             browser.close()
 
