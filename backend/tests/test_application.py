@@ -34,6 +34,17 @@ class ApplicationLogTests(unittest.TestCase):
         message = "FlareSolverr：求解失败，本次账号尝试失败 - Vision API request failed: TimeoutError"
         self.assertTrue(self.application._is_important_log(message))
 
+    def test_record_without_time_uses_singapore_time(self):
+        application = self.application
+        with patch.object(application.STORE, "add_record", return_value={"time": "2026-09-04 12:34"}) as add_record, patch(
+            "sbeans.application.current_singapore_time", return_value="2026-09-04 12:34"
+        ):
+            application.add_record(
+                application.RecordRequest(email="user@example.com", password="secret", time=""),
+                "test-panel-password",
+            )
+        self.assertEqual(add_record.call_args.args[-1], "2026-09-04 12:34")
+
 
 if __name__ == "__main__":
     unittest.main()

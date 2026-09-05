@@ -11,7 +11,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
-from .login_flow import Account, format_singapore_time, parse_accounts, parse_proxies, run_logins
+from .login_flow import (
+    Account,
+    current_singapore_time,
+    format_singapore_time,
+    parse_accounts,
+    parse_proxies,
+    run_logins,
+)
 from .secure_store import SecureStore
 
 
@@ -60,7 +67,7 @@ class LoginRequest(BaseModel):
 class RecordRequest(BaseModel):
     email: str
     password: str
-    time: str
+    time: str = ""
 
 
 class PasswordRequest(BaseModel):
@@ -113,7 +120,7 @@ def add_record(payload: RecordRequest, x_admin_password: str | None = Header(def
     password = require_admin(x_admin_password)
     email = payload.email.strip()
     account_password = payload.password.strip()
-    record_time = payload.time.strip()
+    record_time = payload.time.strip() or current_singapore_time()
     if not email or not account_password or not record_time:
         raise HTTPException(status_code=422, detail="账号、密码和时间都不能为空")
     return {"record": STORE.add_record(password, email, account_password, record_time)}

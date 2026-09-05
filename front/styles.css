@@ -27,9 +27,12 @@ button:disabled { opacity: .55; cursor: wait; }
 #health { font-size: 12px; padding: 5px 9px; background: #e1f0e6; color: #236b5d; border-radius: 3px; }
 .section-head { display: flex; align-items: start; justify-content: space-between; padding-bottom: 18px; }
 .section-head p { margin-bottom: 0; }
-.login-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px 24px; }
+#login-view .section-head { align-items: center; padding-bottom: 10px; }
+.login-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: stretch; }
 .login-grid small { display: block; margin-top: 7px; font-size: 12px; }
-.record-picker { height: 226px; overflow: auto; border: 1px solid #c8bea0; border-radius: 4px; background: #fffdf4; padding: 6px 12px; }
+.saved-record-panel { grid-column: 1; grid-row: 1; min-height: 0; display: flex; flex-direction: column; }
+.task-panels { grid-column: 2; grid-row: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.record-picker { flex: 1 1 226px; min-height: 226px; overflow: auto; border: 1px solid #c8bea0; border-radius: 4px; background: #fffdf4; padding: 6px 12px; }
 .picker-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 9px; align-items: center; padding: 9px 0; border-bottom: 1px solid #ebe3c9; font-size: 13px; }
 .picker-row:last-child { border-bottom: 0; }
 .picker-row input { width: 16px; height: 16px; }
@@ -46,7 +49,7 @@ button:disabled { opacity: .55; cursor: wait; }
 .live-log p { color: inherit; margin: 0 0 5px; overflow-wrap: anywhere; }
 .live-log time { color: #f0c95d; margin-right: 8px; }
 .empty { color: #7a8580; font-size: 13px; margin: 12px 0; }
-.actions { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; padding-top: 2px; }
+.actions { display: flex; align-items: center; justify-content: flex-end; }
 .actions > button { margin-left: 8px; }
 .check { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 500; }
 .check input { width: 16px; height: 16px; }
@@ -99,7 +102,10 @@ button:disabled { opacity: .55; cursor: wait; }
   .tab { white-space: nowrap; padding-inline: 12px; }
   #health { margin-bottom: 9px; white-space: nowrap; }
   .login-grid, .record-form { grid-template-columns: 1fr; }
-  .actions { grid-column: auto; align-items: stretch; flex-direction: column; gap: 16px; }
+  #login-view .section-head { align-items: stretch; flex-direction: column; gap: 12px; }
+  .saved-record-panel, .task-panels { grid-column: auto; grid-row: auto; }
+  .saved-record-panel { min-height: 0; }
+  .actions { align-self: auto; align-items: stretch; flex-direction: column; gap: 16px; }
   .record-row { grid-template-columns: minmax(0, 1fr) auto; }
   .record-row .record-time { grid-row: 2; }
   .library-summary { align-items: start; flex-direction: column; gap: 5px; }

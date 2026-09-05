@@ -14,6 +14,7 @@ from sbeans.login_flow import (
     _is_login_result_url,
     _wait_for_submit_enabled,
     _turnstile_state,
+    current_singapore_time,
     proxy_attempts,
     parse_accounts,
     parse_proxies,
@@ -60,6 +61,9 @@ class LoginFlowParsingTests(unittest.TestCase):
             ["proxy-b"],
         )
         self.assertEqual(proxy_attempts([], 0), [""] * MAX_ACCOUNT_ATTEMPTS)
+
+    def test_current_singapore_time_uses_automatic_record_format(self):
+        self.assertRegex(current_singapore_time(), r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
 
 
 class SolverRequiredTests(unittest.IsolatedAsyncioTestCase):

@@ -119,6 +119,10 @@ def format_singapore_time(value: object) -> str:
     return parsed.astimezone(SINGAPORE_TIMEZONE).strftime("%Y-%m-%d %H:%M")
 
 
+def current_singapore_time() -> str:
+    return datetime.now(timezone.utc).astimezone(SINGAPORE_TIMEZONE).strftime("%Y-%m-%d %H:%M")
+
+
 def _first_code_date(codes: object) -> str:
     if not isinstance(codes, list):
         return ""

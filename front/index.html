@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SBeans</title>
-    <link rel="stylesheet" href="/styles.css?v=20260831-2" />
+    <link rel="stylesheet" href="/styles.css?v=20260904-5" />
   </head>
   <body>
     <header>
@@ -34,31 +34,29 @@
         </div>
 
         <section id="login-view" class="view">
-          <div class="section-head"><div><h1>登录任务</h1><p>任务按账号并发执行，页面与验证会充分等待加载。</p></div></div>
-          <form id="login-form" class="login-grid">
-            <div>
-              <label for="accounts">临时账号</label>
-              <textarea id="accounts" rows="9" placeholder="user@example.com password"></textarea>
-              <small>每行一个账号，邮箱和密码用空格分隔；也可只选择已保存记录。</small>
-            </div>
-            <div>
-              <label>已保存记录</label>
-              <div id="record-picker" class="record-picker"><p class="empty">暂无账号记录</p></div>
-              <small>勾选后与临时账号一并执行。</small>
-            </div>
-            <div>
-              <label for="proxies">代理池</label>
-              <textarea id="proxies" rows="6" placeholder="user:pass@host:port&#10;host:port:user:pass"></textarea>
-              <small>可留空直连；按行轮换，保存在当前浏览器。</small>
-            </div>
-            <div class="log-panel">
-              <div class="log-head"><label>实时日志</label><button id="clear-log" type="button" class="secondary small-button">清空</button></div>
-              <div id="live-log" class="live-log" aria-live="polite"><p class="empty">等待任务开始</p></div>
-            </div>
+          <div class="section-head">
+            <div><h1>登录任务</h1><p>任务按账号并发执行，页面与验证会充分等待加载。</p></div>
             <div class="actions">
-              <label class="check"><input id="debug" type="checkbox" /> 保存调试截图</label>
+              <label class="check"><input id="debug" type="checkbox" form="login-form" /> 保存调试截图</label>
               <button id="stop" type="button" class="secondary" hidden>结束任务</button>
-              <button id="submit" type="submit">开始登录</button>
+              <button id="submit" type="submit" form="login-form">开始登录</button>
+            </div>
+          </div>
+          <form id="login-form" class="login-grid">
+            <div class="saved-record-panel">
+              <label>已保存账号</label>
+              <div id="record-picker" class="record-picker"><p class="empty">暂无账号记录</p></div>
+            </div>
+            <div class="task-panels">
+              <div class="proxy-panel">
+                <label for="proxies">代理池</label>
+                <textarea id="proxies" rows="6" placeholder="user:pass@host:port&#10;host:port:user:pass"></textarea>
+                <small>可留空直连；按行轮换，保存在当前浏览器。</small>
+              </div>
+              <div class="log-panel">
+                <div class="log-head"><label>实时日志</label><button id="clear-log" type="button" class="secondary small-button">清空</button></div>
+                <div id="live-log" class="live-log" aria-live="polite"><p class="empty">等待任务开始</p></div>
+              </div>
             </div>
           </form>
           <div id="notice" role="alert"></div>
@@ -70,7 +68,7 @@
           <form id="record-form" class="record-form">
             <div><label for="record-email">账号</label><input id="record-email" type="email" required /></div>
             <div><label for="record-password">密码</label><input id="record-password" type="password" autocomplete="off" required /></div>
-            <div><label for="record-time">时间</label><input id="record-time" type="text" placeholder="首次手动输入，后续自动更新" required /></div>
+            <div><label for="record-time">时间</label><input id="record-time" type="text" placeholder="留空自动填当前时间（新加坡）" /></div>
             <button type="submit">添加记录</button>
           </form>
           <div id="records-notice" class="inline-notice" role="alert"></div>
@@ -97,6 +95,6 @@
         </section>
       </section>
     </main>
-    <script src="/app.js?v=20260831-2"></script>
+    <script src="/app.js?v=20260904-5"></script>
   </body>
 </html>

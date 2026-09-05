@@ -60,6 +60,31 @@ function formatSingaporeDate(value) {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
+function automaticRecordTimeValue(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(String(value || "").trim());
+  if (!match) return null;
+  const [, year, month, day, hour, minute] = match.map(Number);
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) return null;
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(hour, minute, 0, 0);
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day
+      || date.getUTCHours() !== hour || date.getUTCMinutes() !== minute) return null;
+  return date.getTime();
+}
+
+function sortRecordsForDisplay(items) {
+  return (Array.isArray(items) ? items : [])
+    .map((record, index) => ({ record, index, time: automaticRecordTimeValue(record?.time) }))
+    .sort((left, right) => {
+      if (left.time === null && right.time === null) return left.index - right.index;
+      if (left.time === null) return -1;
+      if (right.time === null) return 1;
+      return left.time - right.time || left.index - right.index;
+    })
+    .map(({ record }) => record);
+}
+
 function firstCodeDate(codes) {
   return (Array.isArray(codes) ? codes : []).find((item) => item && item.endDate)?.endDate || "";
 }
@@ -117,7 +142,7 @@ function renderRecords() {
 }
 
 async function loadRecords() {
-  records = (await request("/api/records")).records;
+  records = sortRecordsForDisplay((await request("/api/records")).records);
   renderRecords();
 }
 
@@ -269,8 +294,7 @@ document.querySelector("#login-form").addEventListener("submit", async (event) =
   event.preventDefault();
   const button = document.querySelector("#submit");
   const recordIds = [...document.querySelectorAll('input[name="saved-record"]:checked')].map((input) => input.value);
-  const accounts = document.querySelector("#accounts").value;
-  if (!accounts.trim() && !recordIds.length) { setNotice(notice, "请输入或选择至少一个账号"); return; }
+  if (!recordIds.length) { setNotice(notice, "请选择至少一个已保存账号"); return; }
   activeController = new AbortController();
   button.disabled = true; button.textContent = "执行中";
   document.querySelector("#stop").hidden = false;
@@ -281,7 +305,7 @@ document.querySelector("#login-form").addEventListener("submit", async (event) =
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Admin-Password": adminPassword },
       signal: activeController.signal,
-      body: JSON.stringify({ accounts, record_ids: recordIds, proxies: proxyField.value, debug: document.querySelector("#debug").checked }),
+      body: JSON.stringify({ record_ids: recordIds, proxies: proxyField.value, debug: document.querySelector("#debug").checked }),
     });
     await readEventStream(response);
   } catch (error) {
