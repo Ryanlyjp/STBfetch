@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SBeans</title>
-    <link rel="stylesheet" href="/styles.css?v=20260904-5" />
+    <link rel="stylesheet" href="/styles.css?v=20260907-3" />
   </head>
   <body>
     <header>
@@ -37,6 +37,7 @@
           <div class="section-head">
             <div><h1>登录任务</h1><p>任务按账号并发执行，页面与验证会充分等待加载。</p></div>
             <div class="actions">
+              <label class="check"><input id="retry-waf" type="checkbox" form="login-form" /> WAF 识别失败时重试一次</label>
               <label class="check"><input id="debug" type="checkbox" form="login-form" /> 保存调试截图</label>
               <button id="stop" type="button" class="secondary" hidden>结束任务</button>
               <button id="submit" type="submit" form="login-form">开始登录</button>
@@ -67,7 +68,7 @@
           <div class="section-head"><div><h1>账号记录</h1><p>账号密码加密保存在服务器，列表不显示密码。</p></div></div>
           <form id="record-form" class="record-form">
             <div><label for="record-email">账号</label><input id="record-email" type="email" required /></div>
-            <div><label for="record-password">密码</label><input id="record-password" type="password" autocomplete="off" required /></div>
+            <div><label for="record-password">密码（可留空）</label><input id="record-password" type="password" autocomplete="off" placeholder="留空使用面板默认密码" /></div>
             <div><label for="record-time">时间</label><input id="record-time" type="text" placeholder="留空自动填当前时间（新加坡）" /></div>
             <button type="submit">添加记录</button>
           </form>
@@ -77,24 +78,50 @@
 
         <section id="code-library-view" class="view" hidden>
           <div class="section-head"><div><h1>优惠码库</h1><p>成功拿到完整四组优惠码的账号会自动归档，可展开条目复制码和日期。</p></div></div>
+          <div id="code-library-toolbar" class="library-toolbar" hidden>
+            <label class="check library-select-all"><input id="code-library-select-all" type="checkbox" /> 全选本页</label>
+            <span id="code-library-selection-count" class="library-selection-count">已选 0 条</span>
+            <button id="delete-code-library" type="button" class="danger small-button" disabled>删除</button>
+            <div class="library-pagination" aria-label="优惠码库分页">
+              <button id="code-library-previous" type="button" class="secondary page-button" title="上一页" aria-label="上一页">&lsaquo;</button>
+              <span id="code-library-page-status">第 1 / 1 页</span>
+              <button id="code-library-next" type="button" class="secondary page-button" title="下一页" aria-label="下一页">&rsaquo;</button>
+            </div>
+          </div>
+          <div id="code-library-notice" class="inline-notice library-notice" role="alert"></div>
           <div id="code-library-list" class="code-library-list"><p class="empty">暂无已归档的四组优惠码</p></div>
         </section>
 
         <section id="settings-view" class="view" hidden>
-          <div class="section-head"><div><h1>面板设置</h1><p>修改后账号记录会使用新密码重新加密。</p></div></div>
-          <form id="password-form" class="settings-form">
-            <label for="current-password">当前面板密码</label>
-            <input id="current-password" type="password" autocomplete="current-password" required />
-            <label for="new-password">新面板密码</label>
-            <input id="new-password" type="password" autocomplete="new-password" required />
-            <label for="confirm-password">确认新密码</label>
-            <input id="confirm-password" type="password" autocomplete="new-password" required />
-            <button type="submit">修改密码</button>
-          </form>
-          <div id="password-notice" class="inline-notice" role="alert"></div>
+          <div class="section-head"><div><h1>面板设置</h1><p>账号密码和面板数据都保存在服务器密文中。</p></div></div>
+          <div class="settings-grid">
+            <div class="settings-block">
+              <h2>默认账号密码</h2>
+              <p id="default-account-password-state" class="settings-state">检查中</p>
+              <form id="default-account-password-form" class="settings-form">
+                <label for="default-account-password">新默认密码</label>
+                <input id="default-account-password" type="password" autocomplete="new-password" required />
+                <button type="submit">保存默认密码</button>
+              </form>
+              <div id="default-account-password-notice" class="inline-notice" role="alert"></div>
+            </div>
+            <div class="settings-block">
+              <h2>面板密码</h2>
+              <form id="password-form" class="settings-form">
+                <label for="current-password">当前面板密码</label>
+                <input id="current-password" type="password" autocomplete="current-password" required />
+                <label for="new-password">新面板密码</label>
+                <input id="new-password" type="password" autocomplete="new-password" required />
+                <label for="confirm-password">确认新密码</label>
+                <input id="confirm-password" type="password" autocomplete="new-password" required />
+                <button type="submit">修改密码</button>
+              </form>
+              <div id="password-notice" class="inline-notice" role="alert"></div>
+            </div>
+          </div>
         </section>
       </section>
     </main>
-    <script src="/app.js?v=20260904-5"></script>
+    <script src="/app.js?v=20260907-3"></script>
   </body>
 </html>

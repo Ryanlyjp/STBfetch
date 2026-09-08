@@ -4,7 +4,14 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 
-from sbeans.flaresolverr_client import _failure_location, _http_error_message, _post_json, solve_turnstile
+from sbeans.flaresolverr_client import (
+    AWS_WAF_VISUAL_FAILURE_LOCATION,
+    FlareSolverFailure,
+    _failure_location,
+    _http_error_message,
+    _post_json,
+    solve_turnstile,
+)
 
 
 class FlareSolverrClientTests(unittest.IsolatedAsyncioTestCase):
@@ -64,6 +71,20 @@ class FlareSolverrClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("位置=AWS WAF视觉识别" in message for message in logs))
         self.assertTrue(any("Vision API request failed: TimeoutError" in message for message in logs))
         self.assertFalse(any("secret" in message for message in logs))
+
+    async def test_solver_can_raise_classified_failure_for_waf_retry(self):
+        with patch.dict(os.environ, {"SBEANS_FLARESOLVERR_URL": "http://solver:8191"}), patch(
+            "sbeans.flaresolverr_client._post_json",
+            side_effect=RuntimeError("FlareSolverr HTTP 500: AWS WAF Confirm did not produce a browser voucher"),
+        ):
+            with self.assertRaises(FlareSolverFailure) as raised:
+                await solve_turnstile(
+                    "https://accounts.studentbeans.com/uk/authorisation/log-in",
+                    "",
+                    raise_on_failure=True,
+                )
+
+        self.assertEqual(raised.exception.location, AWS_WAF_VISUAL_FAILURE_LOCATION)
 
     async def test_solver_returns_redacted_solution_and_cleans_session(self):
         token = "t" * 96

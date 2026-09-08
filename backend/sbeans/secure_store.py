@@ -9,9 +9,16 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TypedDict
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+
+
+class StorePayload(TypedDict):
+    records: list[dict[str, object]]
+    code_library: list[dict[str, object]]
+    settings: dict[str, object]
 
 
 class SecureStore:
@@ -42,6 +49,7 @@ class SecureStore:
         password: str,
         records: list[dict[str, object]],
         code_library: list[dict[str, object]] | None = None,
+        settings: dict[str, object] | None = None,
     ) -> dict[str, str | int]:
         auth_salt = os.urandom(16)
         records_salt = os.urandom(16)
@@ -49,7 +57,7 @@ class SecureStore:
         auth_key = self._derive(password, auth_salt)
         records_key = self._derive(password, records_salt)
         plaintext = json.dumps(
-            {"records": records, "code_library": code_library or []},
+            {"records": records, "code_library": code_library or [], "settings": settings or {}},
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
@@ -68,9 +76,10 @@ class SecureStore:
         password: str,
         records: list[dict[str, object]],
         code_library: list[dict[str, object]] | None = None,
+        settings: dict[str, object] | None = None,
     ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        state = self._build_state(password, records, code_library)
+        state = self._build_state(password, records, code_library, settings)
         fd, temporary = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
         try:
             os.fchmod(fd, 0o600)
@@ -94,7 +103,7 @@ class SecureStore:
         actual = hashlib.sha256(auth_key + b"sbeans-auth-v1").digest()
         return hmac.compare_digest(actual, self._decode(str(state["auth_hash"])))
 
-    def _payload(self, password: str) -> dict[str, list[dict[str, object]]]:
+    def _payload(self, password: str) -> StorePayload:
         if not self.authenticate(password):
             raise ValueError("面板密码错误")
         state = self._read_state()
@@ -106,14 +115,16 @@ class SecureStore:
         )
         decoded = json.loads(plaintext.decode("utf-8"))
         if isinstance(decoded, list):
-            return {"records": decoded, "code_library": []}
+            return {"records": decoded, "code_library": [], "settings": {}}
         if not isinstance(decoded, dict):
             raise ValueError("安全存储内容格式无效")
         records = decoded.get("records")
         code_library = decoded.get("code_library")
+        settings = decoded.get("settings")
         return {
             "records": records if isinstance(records, list) else [],
             "code_library": code_library if isinstance(code_library, list) else [],
+            "settings": settings if isinstance(settings, dict) else {},
         }
 
     def _records(self, password: str) -> list[dict[str, object]]:
@@ -128,9 +139,13 @@ class SecureStore:
     def add_record(self, password: str, email: str, account_password: str, time: str) -> dict[str, str]:
         payload = self._payload(password)
         records = payload["records"]
-        record = {"id": uuid.uuid4().hex, "email": email, "password": account_password, "time": time}
+        settings = payload["settings"]
+        resolved_password = account_password.strip() or str(settings.get("default_account_password") or "")
+        if not resolved_password:
+            raise ValueError("账号密码为空，且尚未设置默认账号密码")
+        record = {"id": uuid.uuid4().hex, "email": email, "password": resolved_password, "time": time}
         records.append(record)
-        self._write_state(password, records, payload["code_library"])
+        self._write_state(password, records, payload["code_library"], settings)
         return {"id": record["id"], "email": email, "time": time}
 
     def delete_record(self, password: str, record_id: str) -> bool:
@@ -139,7 +154,7 @@ class SecureStore:
         remaining = [record for record in records if record["id"] != record_id]
         if len(remaining) == len(records):
             return False
-        self._write_state(password, remaining, payload["code_library"])
+        self._write_state(password, remaining, payload["code_library"], payload["settings"])
         return True
 
     def update_record_time(self, password: str, email: str, record_time: str) -> int:
@@ -154,7 +169,7 @@ class SecureStore:
             record["time"] = record_time
             updated += 1
         if updated:
-            self._write_state(password, payload["records"], payload["code_library"])
+            self._write_state(password, payload["records"], payload["code_library"], payload["settings"])
         return updated
 
     def selected_accounts(self, password: str, record_ids: list[str]) -> list[tuple[str, str]]:
@@ -168,7 +183,20 @@ class SecureStore:
         if not new_password:
             raise ValueError("新密码不能为空")
         payload = self._payload(current_password)
-        self._write_state(new_password, payload["records"], payload["code_library"])
+        self._write_state(new_password, payload["records"], payload["code_library"], payload["settings"])
+
+    def has_default_account_password(self, password: str) -> bool:
+        settings = self._payload(password)["settings"]
+        return bool(str(settings.get("default_account_password") or ""))
+
+    def set_default_account_password(self, password: str, account_password: str) -> None:
+        value = account_password.strip()
+        if not value:
+            raise ValueError("默认账号密码不能为空")
+        payload = self._payload(password)
+        settings = payload["settings"]
+        settings["default_account_password"] = value
+        self._write_state(password, payload["records"], payload["code_library"], settings)
 
     def add_code_library(
         self,
@@ -200,9 +228,19 @@ class SecureStore:
             "codes": stored_codes,
         }
         payload["code_library"].append(entry)
-        self._write_state(password, payload["records"], payload["code_library"])
+        self._write_state(password, payload["records"], payload["code_library"], payload["settings"])
         return entry
 
     def list_code_library(self, password: str) -> list[dict[str, object]]:
         entries = self._payload(password)["code_library"]
         return list(reversed(entries))
+
+    def delete_code_library_entries(self, password: str, entry_ids: list[str]) -> int:
+        payload = self._payload(password)
+        selected = set(entry_ids)
+        entries = payload["code_library"]
+        remaining = [entry for entry in entries if entry.get("id") not in selected]
+        deleted = len(entries) - len(remaining)
+        if deleted:
+            self._write_state(password, payload["records"], remaining, payload["settings"])
+        return deleted

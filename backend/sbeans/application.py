@@ -52,7 +52,7 @@ app = FastAPI(title="SBeans", docs_url=None, redoc_url=None)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:8087", "http://localhost:8087"],
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type", "X-Admin-Password"],
 )
 
@@ -62,17 +62,26 @@ class LoginRequest(BaseModel):
     record_ids: list[str] = Field(default_factory=list)
     proxies: str = ""
     debug: bool = False
+    retry_waf: bool = False
 
 
 class RecordRequest(BaseModel):
     email: str
-    password: str
+    password: str = ""
     time: str = ""
 
 
 class PasswordRequest(BaseModel):
     current_password: str
     new_password: str
+
+
+class DefaultAccountPasswordRequest(BaseModel):
+    password: str
+
+
+class CodeLibraryDeleteRequest(BaseModel):
+    entry_ids: list[str] = Field(default_factory=list)
 
 
 def require_admin(password: str | None) -> str:
@@ -121,9 +130,13 @@ def add_record(payload: RecordRequest, x_admin_password: str | None = Header(def
     email = payload.email.strip()
     account_password = payload.password.strip()
     record_time = payload.time.strip() or current_singapore_time()
-    if not email or not account_password or not record_time:
-        raise HTTPException(status_code=422, detail="账号、密码和时间都不能为空")
-    return {"record": STORE.add_record(password, email, account_password, record_time)}
+    if not email or not record_time:
+        raise HTTPException(status_code=422, detail="账号和时间不能为空")
+    try:
+        record = STORE.add_record(password, email, account_password, record_time)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"record": record}
 
 
 @app.delete("/api/records/{record_id}")
@@ -145,10 +158,44 @@ def change_password(payload: PasswordRequest, x_admin_password: str | None = Hea
     return {"changed": True}
 
 
+@app.get("/api/settings")
+def settings(x_admin_password: str | None = Header(default=None)) -> dict[str, bool]:
+    password = require_admin(x_admin_password)
+    return {"has_default_account_password": STORE.has_default_account_password(password)}
+
+
+@app.post("/api/settings/default-account-password")
+def set_default_account_password(
+    payload: DefaultAccountPasswordRequest,
+    x_admin_password: str | None = Header(default=None),
+) -> dict[str, bool]:
+    password = require_admin(x_admin_password)
+    account_password = payload.password.strip()
+    if not account_password:
+        raise HTTPException(status_code=422, detail="默认账号密码不能为空")
+    STORE.set_default_account_password(password, account_password)
+    return {"changed": True, "has_default_account_password": True}
+
+
 @app.get("/api/code-library")
 def code_library(x_admin_password: str | None = Header(default=None)) -> dict[str, list[dict[str, object]]]:
     password = require_admin(x_admin_password)
     return {"entries": STORE.list_code_library(password)}
+
+
+@app.delete("/api/code-library")
+def delete_code_library(
+    payload: CodeLibraryDeleteRequest,
+    x_admin_password: str | None = Header(default=None),
+) -> dict[str, int]:
+    password = require_admin(x_admin_password)
+    entry_ids = list(dict.fromkeys(entry_id.strip() for entry_id in payload.entry_ids if entry_id.strip()))
+    if not entry_ids:
+        raise HTTPException(status_code=422, detail="请至少选择一条优惠码记录")
+    deleted = STORE.delete_code_library_entries(password, entry_ids)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="所选优惠码记录不存在")
+    return {"deleted": deleted}
 
 
 @app.post("/api/login-stop")
@@ -205,7 +252,14 @@ async def login_stream(payload: LoginRequest, x_admin_password: str | None = Hea
         async def execute() -> None:
             runtime_log("任务执行协程开始")
             try:
-                results = await run_logins(accounts, proxies, SCREENSHOT_DIR, payload.debug, log)
+                results = await run_logins(
+                    accounts,
+                    proxies,
+                    SCREENSHOT_DIR,
+                    payload.debug,
+                    log,
+                    retry_waf=payload.retry_waf,
+                )
                 for result in results:
                     codes = result.get("codes")
                     next_date = _next_code_date(codes)

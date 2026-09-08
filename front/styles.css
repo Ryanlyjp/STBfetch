@@ -49,8 +49,8 @@ button:disabled { opacity: .55; cursor: wait; }
 .live-log p { color: inherit; margin: 0 0 5px; overflow-wrap: anywhere; }
 .live-log time { color: #f0c95d; margin-right: 8px; }
 .empty { color: #7a8580; font-size: 13px; margin: 12px 0; }
-.actions { display: flex; align-items: center; justify-content: flex-end; }
-.actions > button { margin-left: 8px; }
+.actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.actions > button { margin-left: 0; }
 .check { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 500; }
 .check input { width: 16px; height: 16px; }
 #notice, .inline-notice { min-height: 24px; margin-top: 14px; color: #a2352b; font-size: 14px; }
@@ -77,19 +77,38 @@ button:disabled { opacity: .55; cursor: wait; }
 .records-list { margin-top: 12px; border-top: 1px solid #d9cfaa; }
 .record-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(140px, .7fr) auto; gap: 18px; align-items: center; min-height: 54px; padding: 8px 0; border-bottom: 1px solid #e3d9bc; font-size: 13px; }
 .record-row .record-time { color: #65716d; }
+.library-toolbar { display: flex; align-items: center; gap: 12px; min-height: 34px; margin-bottom: 8px; }
+.library-toolbar[hidden] { display: none; }
+.library-select-all { flex: 0 0 auto; }
+.library-selection-count { min-width: 72px; color: #65716d; font-size: 12px; }
+.library-pagination { display: flex; align-items: center; gap: 8px; margin-left: auto; color: #65716d; font-size: 12px; font-variant-numeric: tabular-nums; }
+.page-button { width: 30px; height: 30px; padding: 0; font-size: 22px; line-height: 1; }
 .code-library-list { display: grid; gap: 10px; }
-.library-entry { border: 1px solid #d9cfaa; border-radius: 5px; background: #fffdf4; }
-.library-entry[open] { border-color: #9cc8bd; }
-.library-summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 16px; cursor: pointer; list-style-position: inside; }
-.library-summary::marker { color: #2e8b83; }
+.library-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; }
+.library-summary-card { display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: center; min-width: 0; min-height: 54px; border: 1px solid #d9cfaa; border-radius: 5px; background: #fffdf4; }
+.library-summary-card.expanded { border-color: #2e8b83; }
+.library-entry-checkbox { justify-self: center; width: 16px; height: 16px; margin: 0; }
+.library-summary-toggle { display: grid; grid-template-columns: minmax(0, 1fr) 20px; align-items: center; gap: 8px; min-width: 0; height: 100%; padding: 9px 10px 9px 12px; color: #1b2927; background: transparent; text-align: left; }
+.library-summary-toggle:hover { background: #eef3df; }
+.library-summary-text { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 0; }
+.library-summary-text strong { min-width: 0; overflow-wrap: anywhere; }
+.library-toggle-icon { color: #2e8b83; font-size: 18px; line-height: 1; text-align: center; }
 .library-captured { color: #65716d; font-size: 12px; }
+.library-detail { position: relative; grid-column: 1 / -1; padding: 12px 16px 16px; border: 1px solid #9cc8bd; border-radius: 4px; background: #fffdf4; }
+.library-detail::before { content: ""; position: absolute; top: -7px; width: 12px; height: 12px; border-top: 1px solid #2e8b83; border-left: 1px solid #2e8b83; background: #fffdf4; transform: rotate(45deg); }
+.library-detail.origin-left::before { left: calc(25% - 6px); }
+.library-detail.origin-right::before { left: calc(75% - 6px); }
 .date-row { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; }
 .date-label { flex: 0 0 auto; margin: 0; color: #286f69; font-size: 12px; font-weight: 750; }
 .date-row .copy-value { width: min(270px, 100%); }
 .date-value { color: #65716d; font-size: 12px; }
-.library-entry > .date-row { margin-left: 16px; margin-right: 16px; }
-.library-meta { margin: 0; padding: 0 16px 10px; color: #65716d; font-size: 12px; }
-.library-code-list { padding: 0 16px 16px; }
+.library-meta { margin: 0 0 10px; color: #65716d; font-size: 12px; }
+.library-notice { min-height: 0; margin: 0; }
+.library-notice:not(:empty) { margin-bottom: 8px; }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; }
+.settings-block h2 { margin-bottom: 12px; }
+.settings-state { min-height: 18px; margin: -5px 0 10px; font-size: 12px; }
+.settings-state.configured { color: #187046; }
 .settings-form { width: min(440px, 100%); }
 .settings-form input { margin-bottom: 16px; }
 .settings-form button { margin-top: 4px; }
@@ -97,10 +116,10 @@ button:disabled { opacity: .55; cursor: wait; }
   header { padding: 0 16px; }
   header span { display: none; }
   main { margin-top: 18px; }
-  .workspace-head { align-items: flex-end; }
-  .tabs { overflow-x: auto; }
+  .workspace-head { align-items: flex-end; gap: 8px; }
+  .tabs { flex: 1 1 auto; min-width: 0; overflow-x: auto; }
   .tab { white-space: nowrap; padding-inline: 12px; }
-  #health { margin-bottom: 9px; white-space: nowrap; }
+  #health { flex: 0 0 auto; margin-bottom: 9px; white-space: nowrap; }
   .login-grid, .record-form { grid-template-columns: 1fr; }
   #login-view .section-head { align-items: stretch; flex-direction: column; gap: 12px; }
   .saved-record-panel, .task-panels { grid-column: auto; grid-row: auto; }
@@ -108,8 +127,14 @@ button:disabled { opacity: .55; cursor: wait; }
   .actions { align-self: auto; align-items: stretch; flex-direction: column; gap: 16px; }
   .record-row { grid-template-columns: minmax(0, 1fr) auto; }
   .record-row .record-time { grid-row: 2; }
-  .library-summary { align-items: start; flex-direction: column; gap: 5px; }
+  .library-toolbar { flex-wrap: wrap; gap: 8px 12px; }
+  .library-pagination { margin-left: auto; }
+  .library-row { grid-template-columns: 1fr; }
+  .library-summary-text { grid-template-columns: 1fr; gap: 3px; }
+  .library-detail { grid-column: 1; }
+  .library-detail.origin-left::before, .library-detail.origin-right::before { left: 28px; }
   .code-grid { grid-template-columns: 1fr; }
   .code-entry { grid-template-columns: 22px minmax(0, 1fr); }
   .copy-value { width: 100%; }
+  .settings-grid { grid-template-columns: 1fr; gap: 24px; }
 }

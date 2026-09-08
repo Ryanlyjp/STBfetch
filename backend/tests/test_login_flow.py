@@ -21,7 +21,11 @@ from sbeans.login_flow import (
     playwright_proxy,
     run_logins,
 )
-from sbeans.flaresolverr_client import FlareSolverSolution
+from sbeans.flaresolverr_client import (
+    AWS_WAF_VISUAL_FAILURE_LOCATION,
+    FlareSolverFailure,
+    FlareSolverSolution,
+)
 
 
 class LoginFlowParsingTests(unittest.TestCase):
@@ -149,6 +153,94 @@ class SolverRequiredTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(results[0]["success"])
         playwright.assert_not_called()
         self.assertTrue(any("同一 Camoufox 会话登录完成" in message for message in logs))
+
+    async def test_waf_failure_retries_once_when_enabled_and_second_session_succeeds(self):
+        logs = []
+
+        async def log(message):
+            logs.append(message)
+
+        failure = FlareSolverFailure(
+            AWS_WAF_VISUAL_FAILURE_LOCATION,
+            "AWS WAF Confirm did not produce a browser voucher",
+        )
+        with TemporaryDirectory() as screenshot_dir, patch(
+            "sbeans.login_flow.solve_turnstile",
+            new=AsyncMock(side_effect=[failure, self._successful_solution()]),
+        ) as solve:
+            results = await run_logins(
+                [Account("first@example.com", "password")],
+                ["http://proxy-a.example:8080", "http://proxy-b.example:8080"],
+                screenshot_dir,
+                False,
+                log,
+                retry_waf=True,
+            )
+
+        self.assertTrue(results[0]["success"])
+        self.assertEqual(solve.await_count, 2)
+        self.assertTrue(solve.await_args_list[0].kwargs["raise_on_failure"])
+        self.assertTrue(any("重试开关已开启" in message for message in logs))
+        self.assertTrue(any("第 2/2 次尝试" in message for message in logs))
+
+    async def test_waf_failure_retries_only_once_when_second_session_fails(self):
+        failure = FlareSolverFailure(
+            AWS_WAF_VISUAL_FAILURE_LOCATION,
+            "AWS WAF Confirm did not produce a browser voucher",
+        )
+        second_failure = FlareSolverFailure(
+            AWS_WAF_VISUAL_FAILURE_LOCATION,
+            "AWS WAF Confirm did not produce a browser voucher again",
+        )
+        with TemporaryDirectory() as screenshot_dir, patch(
+            "sbeans.login_flow.solve_turnstile",
+            new=AsyncMock(side_effect=[failure, second_failure]),
+        ) as solve:
+            results = await run_logins(
+                [Account("first@example.com", "password")],
+                [],
+                screenshot_dir,
+                False,
+                retry_waf=True,
+            )
+
+        self.assertFalse(results[0]["success"])
+        self.assertEqual(results[0]["message"], str(second_failure))
+        self.assertEqual(solve.await_count, 2)
+
+    async def test_waf_failure_does_not_retry_when_switch_is_off(self):
+        failure = FlareSolverFailure(
+            AWS_WAF_VISUAL_FAILURE_LOCATION,
+            "AWS WAF Confirm did not produce a browser voucher",
+        )
+        with TemporaryDirectory() as screenshot_dir, patch(
+            "sbeans.login_flow.solve_turnstile", new=AsyncMock(side_effect=failure)
+        ) as solve:
+            results = await run_logins(
+                [Account("first@example.com", "password")],
+                [],
+                screenshot_dir,
+                False,
+            )
+
+        self.assertFalse(results[0]["success"])
+        self.assertEqual(solve.await_count, 1)
+
+    async def test_non_waf_failure_does_not_retry_when_switch_is_on(self):
+        failure = FlareSolverFailure("Turnstile", "Camoufox Turnstile token timeout")
+        with TemporaryDirectory() as screenshot_dir, patch(
+            "sbeans.login_flow.solve_turnstile", new=AsyncMock(side_effect=failure)
+        ) as solve:
+            results = await run_logins(
+                [Account("first@example.com", "password")],
+                [],
+                screenshot_dir,
+                False,
+                retry_waf=True,
+            )
+
+        self.assertFalse(results[0]["success"])
+        self.assertEqual(solve.await_count, 1)
 
     async def test_parallel_accounts_never_share_proxy(self):
         active = set()

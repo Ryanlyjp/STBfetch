@@ -63,3 +63,5 @@ docker-compose up -d --build --force-recreate flaresolverr backend
 ```
 
 日志中的成功标志是 `Camoufox AWS WAF solved`，并且后续必须出现第二次登录 API 响应和登录成功；仅出现 Turnstile 成功不算完成。
+
+面板的“WAF 识别失败时重试一次”开关默认关闭。开启后，backend 仅在第一次会话已结束且失败位置为 `AWS WAF视觉识别` 时创建一次新的 Camoufox 会话；该次重试会重新走完整登录流程，并按当前代理池规则领取一个可用代理。第二次失败或任何其他失败类型都会直接结束任务。

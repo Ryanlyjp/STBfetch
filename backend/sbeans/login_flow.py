@@ -19,7 +19,12 @@ from playwright.async_api import (
     async_playwright,
 )
 
-from .flaresolverr_client import FlareSolverSolution, solve_turnstile
+from .flaresolverr_client import (
+    AWS_WAF_VISUAL_FAILURE_LOCATION,
+    FlareSolverFailure,
+    FlareSolverSolution,
+    solve_turnstile,
+)
 
 LOGIN_URL = (
     "https://accounts.studentbeans.com/uk/authorisation/log-in"
@@ -39,6 +44,7 @@ TURNSTILE_POLL_INTERVAL_SECONDS = 2
 TURNSTILE_TOKEN_MIN_LENGTH = 80
 LOGIN_RESULT_TIMEOUT_MS = 120_000
 MAX_ACCOUNT_ATTEMPTS = 1
+MAX_WAF_RETRY_ATTEMPTS = 2
 COOKIE_CONSENT_WAIT_MS = 8_000
 SINGAPORE_TIMEZONE = ZoneInfo("Asia/Singapore")
 LogCallback = Callable[[str], Awaitable[None]]
@@ -622,6 +628,7 @@ async def run_logins(
     screenshot_dir: Path,
     debug: bool,
     log: LogCallback | None = None,
+    retry_waf: bool = False,
 ) -> list[dict[str, str | bool]]:
     await _emit(log, f"任务开始，共 {len(accounts)} 个账号")
     proxy_pool = _ProxyPool(proxies)
@@ -629,15 +636,16 @@ async def run_logins(
     async def run_account(index: int, account: Account) -> dict[str, str | bool]:
         await _emit(log, f"开始处理第 {index + 1}/{len(accounts)} 个账号：{account.email}")
         last_result: dict[str, str | bool] | None = None
-        for attempt in range(1, MAX_ACCOUNT_ATTEMPTS + 1):
+        max_attempts = MAX_WAF_RETRY_ATTEMPTS if retry_waf else MAX_ACCOUNT_ATTEMPTS
+        for attempt in range(1, max_attempts + 1):
             attempt_started = time.monotonic()
             preferred_index = (index + attempt - 1) % len(proxy_pool) if proxy_pool else 0
             proxy, proxy_index = await proxy_pool.acquire(preferred_index)
             try:
                 if proxy:
-                    await _emit(log, f"{account.email}：第 {attempt}/{MAX_ACCOUNT_ATTEMPTS} 次尝试，使用代理 {proxy_index + 1}/{len(proxy_pool)}（已独占）")
+                    await _emit(log, f"{account.email}：第 {attempt}/{max_attempts} 次尝试，使用代理 {proxy_index + 1}/{len(proxy_pool)}（已独占）")
                 else:
-                    await _emit(log, f"{account.email}：第 {attempt}/{MAX_ACCOUNT_ATTEMPTS} 次尝试，使用直连（已独占）")
+                    await _emit(log, f"{account.email}：第 {attempt}/{max_attempts} 次尝试，使用直连（已独占）")
                 try:
                     solver_solution = await solve_turnstile(
                         LOGIN_URL,
@@ -648,6 +656,7 @@ async def run_logins(
                         return_screenshot=debug,
                         collect_codes=True,
                         collect_url=CODE_COLLECTION_URL,
+                        raise_on_failure=True,
                     )
                     if solver_solution is None:
                         last_result = {
@@ -745,16 +754,28 @@ async def run_logins(
                             if debug_paths:
                                 last_result["debug_screenshots"] = debug_paths
                         await _emit(log, f"{account.email}：同一 Camoufox 会话登录完成，成功={success} - {last_result['message']}")
+                except FlareSolverFailure as exc:
+                    last_result = {
+                        "email": account.email,
+                        "success": False,
+                        "message": str(exc).splitlines()[0][:300],
+                        "failure_location": exc.location,
+                    }
+                    await _emit(
+                        log,
+                        f"{account.email}：第 {attempt}/{max_attempts} 次同页登录失败，"
+                        f"位置={exc.location} - {last_result['message']}",
+                    )
                 except Exception as exc:
                     last_result = {
                         "email": account.email,
                         "success": False,
                         "message": str(exc).splitlines()[0][:300],
                     }
-                    await _emit(log, f"{account.email}：第 {attempt}/{MAX_ACCOUNT_ATTEMPTS} 次同页登录异常 - {last_result['message']}")
+                    await _emit(log, f"{account.email}：第 {attempt}/{max_attempts} 次同页登录异常 - {last_result['message']}")
                 await _emit(
                     log,
-                    f"{account.email}：第 {attempt}/{MAX_ACCOUNT_ATTEMPTS} 次尝试结束，"
+                    f"{account.email}：第 {attempt}/{max_attempts} 次尝试结束，"
                     f"成功={bool(last_result and last_result.get('success'))}，"
                     f"耗时 {time.monotonic() - attempt_started:.1f}s",
                 )
@@ -763,11 +784,20 @@ async def run_logins(
                 await _emit(log, f"{account.email}：已释放当前代理占用")
             if last_result and last_result.get("success"):
                 break
-            if attempt < MAX_ACCOUNT_ATTEMPTS:
-                retry_reason = "登录或代码采集未完成"
-                if last_result and last_result.get("login_success") and not last_result.get("code_collection_success"):
-                    retry_reason = "登录成功但代码采集未完成"
-                await _emit(log, f"{account.email}：第 {attempt + 1}/{MAX_ACCOUNT_ATTEMPTS} 次账号重试（{retry_reason}），FlareSolverr 将创建新的 Camoufox 会话并切换代理")
+            should_retry_waf = (
+                retry_waf
+                and attempt == 1
+                and max_attempts > 1
+                and last_result is not None
+                and last_result.get("failure_location") == AWS_WAF_VISUAL_FAILURE_LOCATION
+            )
+            if not should_retry_waf:
+                break
+            await _emit(
+                log,
+                f"{account.email}：AWS WAF视觉识别失败，重试开关已开启；"
+                f"上一 Camoufox 会话已结束，将创建第 2/{max_attempts} 次新的 Camoufox 会话",
+            )
         return last_result or {"email": account.email, "success": False, "message": "无可用代理"}
 
     workers = [asyncio.create_task(run_account(index, account)) for index, account in enumerate(accounts)]

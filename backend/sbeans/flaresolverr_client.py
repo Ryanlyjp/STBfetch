@@ -12,6 +12,13 @@ from urllib.request import Request, urlopen
 
 
 LogCallback = Callable[[str], Awaitable[None]]
+AWS_WAF_VISUAL_FAILURE_LOCATION = "AWS WAF视觉识别"
+
+
+class FlareSolverFailure(RuntimeError):
+    def __init__(self, location: str, detail: str) -> None:
+        super().__init__(detail)
+        self.location = location
 
 
 @dataclass(frozen=True)
@@ -101,7 +108,7 @@ def _response_message(value: object) -> str:
 def _failure_location(message: str) -> str:
     lowered = str(message or "").lower()
     if any(marker in lowered for marker in ("vision api", "aws waf", "captcha")):
-        return "AWS WAF视觉识别"
+        return AWS_WAF_VISUAL_FAILURE_LOCATION
     if "turnstile" in lowered:
         return "Turnstile"
     if any(marker in lowered for marker in ("voxi", "code collection", "graphql")):
@@ -191,6 +198,7 @@ async def solve_turnstile(
     return_screenshot: bool = False,
     collect_codes: bool = False,
     collect_url: str = "",
+    raise_on_failure: bool = False,
 ) -> FlareSolverSolution | None:
     endpoint = _endpoint()
     if not endpoint:
@@ -375,8 +383,11 @@ async def solve_turnstile(
         )
     except Exception as exc:
         detail = str(exc).splitlines()[0][:300]
+        location = _failure_location(detail)
         await _emit(
             log,
-            f"FlareSolverr：求解失败，位置={_failure_location(detail)}，错误={detail}，本次账号尝试失败",
+            f"FlareSolverr：求解失败，位置={location}，错误={detail}，本次账号尝试失败",
         )
+        if raise_on_failure:
+            raise FlareSolverFailure(location, detail) from exc
         return None
