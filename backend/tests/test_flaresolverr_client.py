@@ -209,7 +209,7 @@ class FlareSolverrClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("登录成功=True" in message for message in logs))
         self.assertFalse(any("secret" in message for message in logs))
 
-    async def test_same_page_request_timeout_covers_login_and_code_collection(self):
+    async def test_same_page_request_timeout_is_total_cap(self):
         responses = [{
             "status": "ok",
             "solution": {
@@ -238,7 +238,7 @@ class FlareSolverrClientTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIsNotNone(solution)
-        self.assertEqual(post.call_args.args[2], 480.0)
+        self.assertEqual(post.call_args.args[2], 180.0)
 
 
 if __name__ == "__main__":

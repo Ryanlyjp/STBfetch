@@ -206,14 +206,8 @@ async def solve_turnstile(
 
     timeout_ms = _timeout_ms()
     same_browser_login = bool(email and password)
-    # The solver's Turnstile window starts after navigation and form filling;
-    # same-page login and code collection need their own time budget as well.
-    request_timeout = (
-        timeout_ms / 1000
-        + (120 if same_browser_login else 0)
-        + (120 if same_browser_login and collect_codes else 0)
-        + 60
-    )
+    # One wall-clock limit covers the complete Camoufox session.
+    request_timeout = timeout_ms / 1000
     if same_browser_login:
         await _emit(log, "FlareSolverr：开始同一 Camoufox 会话求解并提交登录")
         if collect_codes:

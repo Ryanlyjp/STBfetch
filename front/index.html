@@ -66,9 +66,9 @@
 
         <section id="records-view" class="view" hidden>
           <div class="section-head"><div><h1>账号记录</h1><p>账号密码加密保存在服务器，列表不显示密码。</p></div></div>
-          <form id="record-form" class="record-form">
-            <div><label for="record-email">账号</label><input id="record-email" type="email" required /></div>
-            <div><label for="record-password">密码（可留空）</label><input id="record-password" type="password" autocomplete="off" placeholder="留空使用面板默认密码" /></div>
+          <form id="record-form" class="record-form" autocomplete="off">
+            <div><label for="record-email">账号</label><input id="record-email" name="record-account-input" type="email" autocomplete="off" autocapitalize="none" spellcheck="false" data-1p-ignore="true" data-bwignore="true" data-lpignore="true" data-keepassxc-browser-ignore="true" required /></div>
+            <div><label for="record-password">密码（可留空）</label><input id="record-password" name="record-secret-input" type="password" autocomplete="new-password" data-1p-ignore="true" data-bwignore="true" data-lpignore="true" data-keepassxc-browser-ignore="true" placeholder="留空使用面板默认密码" /></div>
             <div><label for="record-time">时间</label><input id="record-time" type="text" placeholder="留空自动填当前时间（新加坡）" /></div>
             <button type="submit">添加记录</button>
           </form>
