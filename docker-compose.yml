@@ -21,6 +21,8 @@ services:
       - "8191"
     restart: unless-stopped
     shm_size: "2gb"
+    mem_limit: "8g"
+    memswap_limit: "8g"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8191/health"]
       interval: 10s

@@ -4,15 +4,19 @@ import asyncio
 import json
 import os
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlsplit
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
 
 LogCallback = Callable[[str], Awaitable[None]]
 AWS_WAF_VISUAL_FAILURE_LOCATION = "AWS WAF视觉识别"
+FLARESOLVERR_MAX_CONCURRENCY = 3
+FLARESOLVERR_SLOTS = asyncio.Semaphore(FLARESOLVERR_MAX_CONCURRENCY)
 
 
 class FlareSolverFailure(RuntimeError):
@@ -156,6 +160,18 @@ async def _post_json_async(
     return await asyncio.to_thread(_post_json, endpoint, payload, timeout_seconds)
 
 
+async def _cancel_camoufox_request(endpoint: str, request_id: str) -> None:
+    with suppress(Exception):
+        await asyncio.wait_for(
+            _post_json_async(
+                endpoint,
+                {"cmd": "request.cancel", "requestId": request_id},
+                10,
+            ),
+            timeout=10,
+        )
+
+
 def _cookies(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
@@ -205,6 +221,7 @@ async def solve_turnstile(
         return None
 
     timeout_ms = _timeout_ms()
+    request_id = uuid4().hex
     same_browser_login = bool(email and password)
     # One wall-clock limit covers the complete Camoufox session.
     request_timeout = timeout_ms / 1000
@@ -216,28 +233,37 @@ async def solve_turnstile(
         await _emit(log, "FlareSolverr：开始请求 Turnstile solver")
     try:
         proxy_data = _proxy_payload(proxy)
-        solved = await _post_json_async(
-            endpoint,
-            {
-                "cmd": "request.get",
-                "url": url,
-                "browser": "camoufox",
-                "proxy": proxy_data,
-                "maxTimeout": timeout_ms,
-                "tabs_till_verify": 1,
-                "waitInSeconds": 1,
-                "returnOnlyCookies": not same_browser_login,
-                "returnScreenshot": return_screenshot,
-                "sbeans_login": same_browser_login,
-                "sbeans_email": email if same_browser_login else None,
-                "sbeans_password": password if same_browser_login else None,
-                "sbeans_login_timeout_ms": 120_000 if same_browser_login else None,
-                "sbeans_collect_codes": bool(same_browser_login and collect_codes),
-                "sbeans_collect_url": collect_url if same_browser_login and collect_codes else None,
-                "sbeans_collect_timeout_ms": 120_000 if same_browser_login and collect_codes else None,
-            },
-            request_timeout,
-        )
+        try:
+            async with FLARESOLVERR_SLOTS:
+                solved = await _post_json_async(
+                    endpoint,
+                    {
+                        "cmd": "request.get",
+                        "requestId": request_id,
+                        "url": url,
+                        "browser": "camoufox",
+                        "proxy": proxy_data,
+                        "maxTimeout": timeout_ms,
+                        "tabs_till_verify": 1,
+                        "waitInSeconds": 1,
+                        "returnOnlyCookies": not same_browser_login,
+                        "returnScreenshot": return_screenshot,
+                        "sbeans_login": same_browser_login,
+                        "sbeans_email": email if same_browser_login else None,
+                        "sbeans_password": password if same_browser_login else None,
+                        "sbeans_login_timeout_ms": 120_000 if same_browser_login else None,
+                        "sbeans_collect_codes": bool(same_browser_login and collect_codes),
+                        "sbeans_collect_url": collect_url if same_browser_login and collect_codes else None,
+                        "sbeans_collect_timeout_ms": 120_000 if same_browser_login and collect_codes else None,
+                    },
+                    request_timeout,
+                )
+        except asyncio.CancelledError:
+            await asyncio.shield(_cancel_camoufox_request(endpoint, request_id))
+            raise
+        except Exception:
+            await _cancel_camoufox_request(endpoint, request_id)
+            raise
         if solved.get("status") != "ok":
             detail = _response_message(solved)
             raise RuntimeError(f"FlareSolverr 返回错误：{detail or '未完成页面求解'}")

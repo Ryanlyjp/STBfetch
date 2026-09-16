@@ -1,8 +1,13 @@
 import base64
 import logging
+import multiprocessing
 import os
 import platform
+import shutil
+import signal
 import sys
+import tempfile
+import threading
 import time
 from datetime import timedelta
 from html import escape
@@ -60,6 +65,12 @@ TURNSTILE_SELECTORS = [
 
 SHORT_TIMEOUT = 1
 SESSIONS_STORAGE = SessionsStorage()
+CAMOUFOX_MAX_CONCURRENCY = 3
+CAMOUFOX_WORKER_STOP_SECONDS = 5
+CAMOUFOX_PROCESS_CONTEXT = multiprocessing.get_context('spawn')
+CAMOUFOX_SLOTS = threading.BoundedSemaphore(CAMOUFOX_MAX_CONCURRENCY)
+CAMOUFOX_WORKERS = {}
+CAMOUFOX_WORKERS_LOCK = threading.Lock()
 
 SBEANS_CODE_ENDPOINT = 'https://graphql.studentbeans.com/graphql/v1/query'
 SBEANS_CODE_OFFERS = (
@@ -267,6 +278,8 @@ def _controller_v1_handler(req: V1RequestBase) -> V1ResponseBase:
         res = _cmd_sessions_list(req)
     elif req.cmd == 'sessions.destroy':
         res = _cmd_sessions_destroy(req)
+    elif req.cmd == 'request.cancel':
+        res = _cmd_request_cancel(req)
     elif req.cmd == 'request.get':
         res = _cmd_request_get(req)
     elif req.cmd == 'request.post':
@@ -356,11 +369,121 @@ def _cmd_sessions_destroy(req: V1RequestBase) -> V1ResponseBase:
     })
 
 
+def _terminate_camoufox_worker(process) -> None:
+    if process is None or process.pid is None:
+        return
+    if process.is_alive():
+        try:
+            if os.getpgid(process.pid) == process.pid:
+                os.killpg(process.pid, signal.SIGTERM)
+            else:
+                process.terminate()
+        except ProcessLookupError:
+            pass
+        process.join(CAMOUFOX_WORKER_STOP_SECONDS)
+    if process.is_alive():
+        try:
+            if os.getpgid(process.pid) == process.pid:
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except ProcessLookupError:
+            pass
+        process.join(CAMOUFOX_WORKER_STOP_SECONDS)
+
+
+def _cmd_request_cancel(req: V1RequestBase) -> V1ResponseBase:
+    request_id = str(req.requestId or '').strip()
+    if not request_id:
+        raise Exception("Request parameter 'requestId' is mandatory in 'request.cancel' command.")
+    with CAMOUFOX_WORKERS_LOCK:
+        process = CAMOUFOX_WORKERS.get(request_id)
+    _terminate_camoufox_worker(process)
+    return V1ResponseBase({
+        "status": STATUS_OK,
+        "message": "Camoufox request cancelled." if process is not None else "Camoufox request already finished."
+    })
+
+
+def _camoufox_response_dict(response: ChallengeResolutionT) -> dict:
+    return {
+        'status': response.status,
+        'message': response.message,
+        'result': vars(response.result) if response.result is not None else None,
+    }
+
+
+def _camoufox_worker(request_data: dict, work_dir: str, sender) -> None:
+    os.setsid()
+    os.environ.update({'TMPDIR': work_dir, 'TEMP': work_dir, 'TMP': work_dir})
+    sender.send(('ready', None))
+    try:
+        response = _resolve_camoufox_challenge(V1RequestBase(request_data))
+        sender.send(('result', _camoufox_response_dict(response)))
+    except BaseException as exc:
+        sender.send(('error', str(exc).replace('\n', '\\n')))
+    finally:
+        sender.close()
+
+
+def _resolve_camoufox_isolated(req: V1RequestBase) -> ChallengeResolutionT:
+    timeout = max(1.0, int(req.maxTimeout) / 1000)
+    deadline = time.monotonic() + timeout
+    if not CAMOUFOX_SLOTS.acquire(timeout=timeout):
+        raise Exception(f'Camoufox concurrency wait timed out after {timeout} seconds.')
+
+    receiver = None
+    process = None
+    work_dir = tempfile.mkdtemp(prefix='camoufox-task-')
+    request_id = str(req.requestId or '').strip()
+    try:
+        receiver, sender = CAMOUFOX_PROCESS_CONTEXT.Pipe(duplex=False)
+        process = CAMOUFOX_PROCESS_CONTEXT.Process(
+            target=_camoufox_worker,
+            args=(vars(req).copy(), work_dir, sender),
+        )
+        process.start()
+        sender.close()
+        if request_id:
+            with CAMOUFOX_WORKERS_LOCK:
+                CAMOUFOX_WORKERS[request_id] = process
+
+        ready_timeout = min(CAMOUFOX_WORKER_STOP_SECONDS, max(0.0, deadline - time.monotonic()))
+        if not receiver.poll(ready_timeout):
+            raise Exception('Camoufox worker failed to start.')
+        state, payload = receiver.recv()
+        if state != 'ready':
+            raise Exception(str(payload or 'Camoufox worker failed to start.'))
+
+        remaining = max(0.0, deadline - time.monotonic())
+        if not receiver.poll(remaining):
+            raise Exception(f'Camoufox request timed out after {timeout} seconds.')
+        try:
+            state, payload = receiver.recv()
+        except EOFError as exc:
+            raise Exception('Camoufox request was cancelled.') from exc
+        if state == 'error':
+            raise Exception(str(payload))
+        if state != 'result' or not isinstance(payload, dict):
+            raise Exception('Camoufox worker returned an invalid response.')
+        return ChallengeResolutionT(payload)
+    finally:
+        if request_id:
+            with CAMOUFOX_WORKERS_LOCK:
+                if CAMOUFOX_WORKERS.get(request_id) is process:
+                    CAMOUFOX_WORKERS.pop(request_id, None)
+        _terminate_camoufox_worker(process)
+        if receiver is not None:
+            receiver.close()
+        shutil.rmtree(work_dir, ignore_errors=True)
+        CAMOUFOX_SLOTS.release()
+
+
 def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
     if getattr(req, 'browser', None) == 'camoufox':
         if method != 'GET':
             raise Exception("Camoufox solver only supports GET requests")
-        return _resolve_camoufox_challenge(req)
+        return _resolve_camoufox_isolated(req)
 
     timeout = int(req.maxTimeout) / 1000
     driver = None

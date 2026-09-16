@@ -1,4 +1,5 @@
 import io
+import asyncio
 import os
 import unittest
 from unittest.mock import patch
@@ -239,6 +240,81 @@ class FlareSolverrClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(solution)
         self.assertEqual(post.call_args.args[2], 180.0)
+
+    async def test_cancelled_solver_request_sends_remote_cleanup(self):
+        started = asyncio.Event()
+        calls = []
+
+        async def post(_endpoint, payload, _timeout):
+            calls.append(payload)
+            if payload["cmd"] == "request.get":
+                started.set()
+                await asyncio.Event().wait()
+            return {"status": "ok"}
+
+        with patch.dict(os.environ, {"SBEANS_FLARESOLVERR_URL": "http://solver:8191"}), patch(
+            "sbeans.flaresolverr_client._post_json_async", side_effect=post
+        ):
+            task = asyncio.create_task(
+                solve_turnstile(
+                    "https://accounts.studentbeans.com/uk/authorisation/log-in",
+                    "",
+                )
+            )
+            await asyncio.wait_for(started.wait(), timeout=1)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        self.assertEqual([call["cmd"] for call in calls], ["request.get", "request.cancel"])
+        self.assertEqual(calls[0]["requestId"], calls[1]["requestId"])
+
+    async def test_solver_limits_concurrency_to_three_requests(self):
+        started_three = asyncio.Event()
+        release = asyncio.Event()
+        active = 0
+        peak = 0
+
+        async def post(_endpoint, payload, _timeout):
+            nonlocal active, peak
+            self.assertEqual(payload["cmd"], "request.get")
+            active += 1
+            peak = max(peak, active)
+            if active == 3:
+                started_three.set()
+            try:
+                await release.wait()
+            finally:
+                active -= 1
+            return {
+                "status": "ok",
+                "solution": {
+                    "turnstile_token": "t" * 96,
+                    "userAgent": "solver-agent",
+                    "cookies": [],
+                },
+            }
+
+        with patch.dict(os.environ, {"SBEANS_FLARESOLVERR_URL": "http://solver:8191"}), patch(
+            "sbeans.flaresolverr_client._post_json_async", side_effect=post
+        ):
+            tasks = [
+                asyncio.create_task(
+                    solve_turnstile(
+                        "https://accounts.studentbeans.com/uk/authorisation/log-in",
+                        "",
+                    )
+                )
+                for _ in range(4)
+            ]
+            await asyncio.wait_for(started_three.wait(), timeout=1)
+            await asyncio.sleep(0)
+            self.assertEqual(peak, 3)
+            release.set()
+            results = await asyncio.gather(*tasks)
+
+        self.assertEqual(peak, 3)
+        self.assertTrue(all(result is not None for result in results))
 
 
 if __name__ == "__main__":

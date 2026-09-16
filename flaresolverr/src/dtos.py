@@ -78,6 +78,7 @@ class V1RequestBase(object):
     sbeans_collect_codes: bool = None
     sbeans_collect_url: str = None
     sbeans_collect_timeout_ms: int = None
+    requestId: str = None
 
     def __init__(self, _dict):
         self.__dict__.update(_dict)
